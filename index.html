@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>2D Football Match Engine v3.0</title>
+    <link rel="stylesheet" href="./style.css">
+  </head>
+  <body>
+    <div id="app">
+      <header class="scoreboard">
+        <div class="team team-home">
+          <h2>HOME</h2>
+          <span id="score-home">0</span>
+        </div>
+        <div class="match-info">
+          <div id="match-time">00:00</div>
+          <div id="match-half">1st Half</div>
+        </div>
+        <div class="team team-away">
+          <span id="score-away">0</span>
+          <h2>AWAY</h2>
+        </div>
+      </header>
+
+      <!-- Referee Info -->
+      <div class="referee-bar">
+        <span>🏁 Referee: <strong id="referee-name">—</strong></span>
+        <span>Strictness: <strong id="referee-strictness">—</strong></span>
+      </div>
+
+      <!-- Stats Bar -->
+      <div class="stats-bar">
+        <div class="stats-team stats-home">
+          <span class="stat">Fouls <b id="stat-home-fouls">0</b></span>
+          <span class="stat">🟨 <b id="stat-home-yellows">0</b></span>
+          <span class="stat">🟥 <b id="stat-home-reds">0</b></span>
+          <span class="stat">Poss <b id="stat-home-possession">50%</b></span>
+        </div>
+        <div class="stats-divider">VS</div>
+        <div class="stats-team stats-away">
+          <span class="stat"><b id="stat-away-possession">50%</b> Poss</span>
+          <span class="stat"><b id="stat-away-yellows">0</b> 🟨</span>
+          <span class="stat"><b id="stat-away-reds">0</b> 🟥</span>
+          <span class="stat"><b id="stat-away-fouls">0</b> Fouls</span>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="btn-start">Start Match</button>
+        <button id="btn-speed-1x" class="active">1x</button>
+        <button id="btn-speed-2x">2x</button>
+        <button id="btn-speed-5x">5x</button>
+        <button id="btn-speed-10x">10x</button>
+        <button id="btn-var-toggle" class="btn-var active">VAR: ON</button>
+      </div>
+
+      <div class="canvas-container">
+        <canvas id="pitch" width="800" height="500"></canvas>
+      </div>
+
+      <div class="match-log" id="match-log">
+        <div class="log-entry">Match ready to start.</div>
+      </div>
+    </div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
