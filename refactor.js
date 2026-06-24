@@ -1,7 +1,10 @@
-import Phaser from 'phaser';
+import fs from 'fs';
+
+const content = `import Phaser from 'phaser';
 
 // =====================================================================
-// 2D FOOTBALL MATCH ENGINE v5.1 (Phaser 3 + Z-Axis Physics & Tuning)
+// 2D FOOTBALL MATCH ENGINE v5.0 (Phaser 3 + Realism Physics & AI)
+// 1-20 Attributes, Dynamic Ball Speed, Set Pieces, Rebounds
 // =====================================================================
 
 // ===== VECTOR =====
@@ -28,11 +31,9 @@ const C = {
   GOAL_Y: 200,
   BALL_R: 4,
   PLAYER_R: 8,
-  FRICTION: 0.95, // Increased friction so ball stops sooner
-  MAX_SPEED: 2.2, // Slightly slower players
-  MAX_BALL_SPEED: 12,
-  GRAVITY: 0.25,  // Z-axis gravity
-  BOUNCE: 0.5,    // Z-axis bounce retention
+  FRICTION: 0.97,
+  MAX_SPEED: 2.5,
+  MAX_BALL_SPEED: 18,
   PENALTY_SPOT: 80,
   PENALTY_BOX_W: 110,
   PENALTY_BOX_H: 220,
@@ -65,9 +66,9 @@ function logEvent(msg, type = 'normal') {
   const logDiv = document.getElementById('match-log');
   if (!logDiv) return;
   const entry = document.createElement('div');
-  entry.className = `log-entry log-${type}`;
+  entry.className = \\\`log-entry log-\\\${type}\\\`;
   const timeEl = document.getElementById('match-time');
-  entry.innerHTML = `<span class="log-time">[${timeEl ? timeEl.innerText : '??:??'}]</span> ${msg}`;
+  entry.innerHTML = \\\`<span class="log-time">[\\\${timeEl ? timeEl.innerText : '??:??'}]</span> \\\${msg}\\\`;
   logDiv.prepend(entry);
   while (logDiv.children.length > 200) logDiv.removeChild(logDiv.lastChild);
 }
@@ -133,9 +134,7 @@ function generateAttributes(role) {
 class Ball {
   constructor() {
     this.pos = new Vector(C.PITCH_W / 2, C.PITCH_H / 2);
-    this.z = 0;   // Height (0 = ground)
     this.vel = new Vector(0, 0);
-    this.vz = 0;  // Vertical velocity
     this.owner = null;
     this.lastTouch = null;
   }
@@ -151,56 +150,24 @@ class Ball {
       this.pos = this.owner.pos.copy();
       this.pos.x += (this.owner.team === 0 ? 10 : -10);
       this.vel.mult(0);
-      this.z = 0;
-      this.vz = 0;
       return;
     }
-    
-    // XY movement
     this.pos.add(this.vel);
-    
-    // Friction only fully applies if ball is on ground. Less friction in air.
-    if (this.z > 0) {
-       this.vel.mult(0.99); // Air resistance
-    } else {
-       this.vel.mult(C.FRICTION); // Ground friction
-    }
-    
-    if (this.vel.mag() < 0.1 && this.z <= 0) this.vel.mult(0);
-
-    // Z movement
-    if (this.z > 0 || this.vz > 0) {
-      this.z += this.vz;
-      this.vz -= C.GRAVITY;
-
-      // Ground bounce
-      if (this.z <= 0) {
-        this.z = 0;
-        this.vz = -this.vz * C.BOUNCE;
-        if (this.vz < 0.5) this.vz = 0; // stop bouncing
-      }
-    }
+    this.vel.mult(C.FRICTION);
+    if (this.vel.mag() < 0.1) this.vel.mult(0);
   }
 
   draw() {
     let g = this.graphics;
     g.clear();
     
-    // Shadow (stays at ground level, scales with height)
-    let shadowScale = Math.max(0.2, 1 - (this.z / 100));
-    g.fillStyle(0x000000, 0.4 * shadowScale);
-    g.fillEllipse(this.pos.x + 4, this.pos.y + 4, C.BALL_R * 2 * shadowScale, C.BALL_R * 1.2 * shadowScale);
+    g.fillStyle(0x000000, 0.25);
+    g.fillEllipse(this.pos.x + 2, this.pos.y + 2, C.BALL_R * 2, C.BALL_R * 1.2);
 
-    // Body (drawn higher up based on Z)
     g.fillStyle(0xffffff, 1);
-    g.fillCircle(this.pos.x, this.pos.y - this.z, C.BALL_R);
-    
-    // Classic soccer ball pattern dot
-    g.fillStyle(0x222222, 1);
-    g.fillCircle(this.pos.x + 1, this.pos.y - this.z + 1, C.BALL_R * 0.4);
-
-    g.lineStyle(1, 0x333333, 1);
-    g.strokeCircle(this.pos.x, this.pos.y - this.z, C.BALL_R);
+    g.fillCircle(this.pos.x, this.pos.y, C.BALL_R);
+    g.lineStyle(1, 0x555555, 1);
+    g.strokeCircle(this.pos.x, this.pos.y, C.BALL_R);
   }
 }
 
@@ -256,33 +223,20 @@ class Player {
     if (this.cooldown > 0) this.cooldown--;
     if (this.cardFlash) { this.cardFlash.timer--; if (this.cardFlash.timer <= 0) this.cardFlash = null; }
 
-    let ball = engine.ball;
-    
-    // Reset GK holding timer if goalkeeper no longer has possession
-    if (ball.owner !== this) {
-      this.gkHoldTimer = 0;
-    }
-
-    let mentality = (this.team === 0) ? engine.homeMentality : 'Balanced';
-    let tactic = (this.team === 0) ? engine.homeTactic : 'Mixed';
-
     let isSprinting = this.vel.mag() > this.effectiveSpeed * 0.7;
-    // Gegenpress is highly fatiguing
-    this.drainStamina(isSprinting || (tactic === 'Gegenpress' && this.team === 0));
+    this.drainStamina(isSSprint);
 
     if (engine.state !== 'PLAYING') {
+      // In set piece or out of bounds, damp velocity but allow position target updates if needed
       this.vel.mult(0.8);
       this.pos.add(this.vel);
       return;
     }
 
+    let ball = engine.ball;
     let target = this.basePos.copy();
     let speedMult = this.effectiveSpeed / C.MAX_SPEED;
-    
-    // Ignore ball if it's flying high overhead
-    let ballPickupDistance = C.PICKUP_RANGE;
-    if (ball.z > 20) ballPickupDistance = 0; 
-    let distToBallGround = this.pos.dist(ball.pos);
+    let distToBall = this.pos.dist(ball.pos);
 
     let myTeam = engine.getActivePlayers(this.team);
     let oppTeam = engine.getActivePlayers(this.team === 0 ? 1 : 0);
@@ -299,450 +253,173 @@ class Player {
     let distToOppGoal = this.pos.dist(new Vector(oppGoalX, goalY));
 
     if (ball.owner === this) {
-      // ============================================================
-      // BALL CARRIER: Vision-based decision tree
-      // ============================================================
-      
-      // --- GOALKEEPER HOLDING BALL (3.5s Rule) ---
-      if (this.role === 'GK') {
-        let isPassBack = ball.lastTouch && ball.lastTouch.team === this.team && ball.lastTouch !== this;
-        if (!isPassBack && isInPenaltyBox(this.pos, this.team)) {
-          if (this.gkHoldTimer === undefined || this.gkHoldTimer <= 0) {
-            this.gkHoldTimer = 210; // 3.5 seconds in-game at 60fps
-            logEvent(`🧤 GK #${this.number} gathers the ball in hands (3.5s)`, 'action');
-          }
-          this.gkHoldTimer--;
-
-          this.vel.mult(0.5);
-          ball.pos = new Vector(this.pos.x + (this.team === 0 ? 8 : -8), this.pos.y);
-          ball.z = 10;
-          ball.vz = 0;
-          ball.vel.mult(0);
-
-          let minHoldTime = 90; // 1.5 seconds min hold for realism
-          let holdDuration = 600 - this.gkHoldTimer;
-          if (this.gkHoldTimer <= 0 || (holdDuration > minHoldTime && Math.random() < 0.025)) {
-            let teammates = myTeam.filter(p => p !== this);
-            let shortThrow = Math.random() < 0.3; // 30% short throw, 70% long punt
-            let targetPlayer = null;
-
-            if (shortThrow && teammates.length > 0) {
-              // Find the nearest teammate
-              targetPlayer = [...teammates].sort((a,b) => this.pos.dist(a.pos) - this.pos.dist(b.pos))[0];
-              // If they are too far (> 220px), do not use short throw
-              if (this.pos.dist(targetPlayer.pos) > 220) {
-                targetPlayer = null;
-              }
-            }
-
-            if (targetPlayer) {
-              let passVec = Vector.sub(targetPlayer.pos, this.pos).normalize();
-              let passLen = this.pos.dist(targetPlayer.pos);
-              let power = 4 + (passLen / 80);
-              power = Math.min(8, power);
-              passVec.mult(power);
-              ball.owner = null;
-              ball.vel = passVec;
-              ball.vz = 0; // low throw
-              ball.lastTouch = this;
-              this.cooldown = 40;
-              this.gkHoldTimer = 0;
-              logEvent(`🧤 GK #${this.number} rolls a short throw to #${targetPlayer.number}`, 'action');
-            } else {
-              // Long random punt down the pitch towards opponent's goal!
-              let targetX = this.team === 0 ? C.PITCH_W * 0.75 : C.PITCH_W * 0.25;
-              let targetY = C.PITCH_H / 2 + (Math.random() - 0.5) * C.PITCH_H * 0.6;
-              let puntTarget = new Vector(targetX, targetY);
-              
-              let passVec = Vector.sub(puntTarget, this.pos).normalize();
-              passVec.x += (Math.random() - 0.5) * 0.25;
-              passVec.y += (Math.random() - 0.5) * 0.25;
-              passVec.normalize();
-              
-              let power = 9 + Math.random() * 3; // strong punt
-              passVec.mult(power);
-              
-              ball.owner = null;
-              ball.vel = passVec;
-              ball.vz = 5 + Math.random() * 4; // high flight
-              ball.lastTouch = this;
-              this.cooldown = 45;
-              this.gkHoldTimer = 0;
-              logEvent(`🧤 GK #${this.number} punts the ball long downfield!`, 'action');
-            }
-          }
-          return;
-        } else {
-          // Pass back or outside penalty box: must play with feet!
-          this.gkHoldTimer = 0;
-        }
-      }
-
-      let oppGoalPos = new Vector(oppGoalX, goalY);
-
-      // How many opponents are nearby? (threat level)
-      let nearbyOpp = oppTeam.filter(o => o.pos.dist(this.pos) < 60).length;
-      let pressured = nearbyOpp >= 2;
-      let heavilyPressured = nearbyOpp >= 3;
-
-      // How open is space ahead?
-      let aheadX = this.team === 0 ? this.pos.x + 80 : this.pos.x - 80;
-      let spaceAhead = oppTeam.filter(o => Math.abs(o.pos.x - aheadX) < 40 && Math.abs(o.pos.y - this.pos.y) < 50).length === 0;
-
       // === SHOOTING ===
-      let composureMod = this.attr.composure / 20;
-      let finishingMod = this.attr.finishing / 20;
-      
-      let blockerCount = oppTeam.filter(o => {
-        let toGoal = Vector.sub(oppGoalPos, this.pos);
-        let toOpp = Vector.sub(o.pos, this.pos);
-        let dot = (toGoal.x * toOpp.x + toGoal.y * toOpp.y) / (toGoal.mag() * Math.max(toOpp.mag(), 0.01));
-        return dot > 0.82 && toOpp.mag() < distToOppGoal;
-      }).length;
-      
-      let shootZone = distToOppGoal < 180;
-      let dangerZone = distToOppGoal < 90;
-      let longShootZone = distToOppGoal < 300 && distToOppGoal >= 180;
-      
-      let willShoot = false;
-      let isLongShot = false;
-
-      // Both FWD and MID can shoot
-      if (this.role === 'FWD' || this.role === 'MID') {
-        if (dangerZone) {
-          // Close snap shot: shoot immediately! Ignore blockers
-          willShoot = Math.random() < 0.22;
-        } else if (shootZone) {
-          // Inside penalty area: shoot if clear or with moderate probability if blocked
-          let baseChance = (blockerCount <= 1) ? 0.08 : 0.035;
-          willShoot = Math.random() < (baseChance * finishingMod * composureMod);
-        } else if (longShootZone && (tactic !== 'Tiki Taka' || Math.random() < 0.15)) {
-          // Outside box: take a long shot if path is relatively clear
-          // Midfielders take long shots!
-          let longShotChance = (this.role === 'MID' ? 0.022 : 0.016) * finishingMod * composureMod;
-          if (blockerCount <= 2 && Math.random() < longShotChance) {
-            willShoot = true;
-            isLongShot = true;
-          }
-        }
-      }
-
-      if (willShoot) {
-        let accuracy = 0.35 + (this.attr.finishing / 20) * 0.6;
-        let maxDev = C.GOAL_W * 1.2 * (1 - accuracy);
+      let composureMod = this.attr.composure / 20; 
+      let shootThreshold = (this.attr.finishing / 80) * composureMod; 
+      if (distToOppGoal < 300 && Math.random() < shootThreshold) {
+        let accuracy = 0.3 + (this.attr.finishing / 20) * 0.65; 
+        let maxDev = C.GOAL_W * 1.5 * (1 - accuracy);
         let dy = (Math.random() - 0.5) * maxDev;
-        let basePower = isLongShot ? 7.5 : 6;
-        let power = basePower + (this.attr.finishing / 20) * 4 + (this.attr.strength / 20) * 2;
-        let shootVec = Vector.sub(oppGoalPos, this.pos);
-        shootVec.y += dy;
-        shootVec.normalize().mult(power);
 
+        let power = 10 + (this.attr.finishing / 20) * 8 + (this.attr.strength / 20) * 4; 
+
+        let shootVec = new Vector(oppGoalX - this.pos.x, goalY + dy - this.pos.y).normalize().mult(power);
         ball.owner = null;
         ball.vel = shootVec;
-        
-        if (isLongShot) {
-          ball.vz = 2.5 + Math.random() * 2.5; // Top spin simulation (low dipping path)
-          logEvent(`💥 Midfielder #${this.number} lets fly from distance!`, 'action');
-        } else {
-          ball.vz = Math.random() * 1.5;
-          logEvent(`💥 #${this.number} shoots from inside the box!`, 'action');
-        }
         ball.lastTouch = this;
-        this.cooldown = 40;
+        this.cooldown = 30;
+        logEvent(\\\`💥 #\\\${this.number} shoots!\\\`, 'action');
         return;
       }
 
       // === PASSING ===
-      let passFreq = heavilyPressured ? 0.12 : pressured ? 0.06 : 0.008;
-      if (tactic === 'Tiki Taka') {
-        passFreq = heavilyPressured ? 0.22 : pressured ? 0.15 : 0.06;
-      }
-
+      let passFreq = (this.attr.passing / 100) + (this.attr.vision / 200);
       if (Math.random() < passFreq) {
         let teammates = myTeam.filter(p => p !== this);
         let bestTarget = null;
         let bestScore = -Infinity;
 
         teammates.forEach(t => {
-          let tDistGoal = t.pos.dist(oppGoalPos);
+          let tDistGoal = t.pos.dist(new Vector(oppGoalX, goalY));
           let passLen = this.pos.dist(t.pos);
-          if (passLen > 350) return; // Don't try ridiculous passes
-          
           let forwardness = this.team === 0 ? t.pos.x - this.pos.x : this.pos.x - t.pos.x;
-          // Tiki Taka allows backward passes to keep possession; other tactics reject backward passes
-          if (tactic !== 'Tiki Taka' && forwardness < -20 && !heavilyPressured) return;
-          if (tactic === 'Tiki Taka' && passLen > 200) return; // Short pass rule
-
-          let nearestOppToT = oppTeam.reduce((min, o) => Math.min(min, o.pos.dist(t.pos)), Infinity);
-          if (nearestOppToT < 25) return; // Target marked too tightly
-
-          let score = 0;
-          if (heavilyPressured) {
-            score = nearestOppToT * 1.5 - passLen * 0.2;
-          } else {
-            score = forwardness * 0.6 - tDistGoal * 0.2 - passLen * 0.1 + nearestOppToT * 0.3;
-          }
-          score += (Math.random() - 0.5) * (20 - this.attr.vision) * 1.5;
+          let score = forwardness * 0.5 - tDistGoal * 0.3 - passLen * 0.2;
+          let nearestOpp = oppTeam.reduce((min, o) => Math.min(min, o.pos.dist(t.pos)), Infinity);
+          if (nearestOpp < 30) score -= 50;
+          score += (Math.random() - 0.5) * (20 - this.attr.vision * 2);
           if (score > bestScore) { bestScore = score; bestTarget = t; }
         });
 
         if (bestTarget) {
           let offRes = engine.offsideSystem.check(this, bestTarget, engine);
           if (offRes.isOffside) {
-            logEvent(`🚩 OFFSIDE! Flag against #${bestTarget.number}`, 'whistle');
-            engine.ball.owner = null;
-            engine.ball.vel.mult(0);
-            engine.ball.z = 0;
-            engine.ball.vz = 0;
-            engine.triggerSetPiece('FREE_KICK', offRes.offsidePos, this.team === 0 ? 1 : 0);
+            logEvent(\\\`🚩 OFFSIDE! Flag against #\\\${bestTarget.number}\\\`, 'whistle');
+            engine.triggerSetPiece('FREE_KICK', bestTarget.pos.copy(), this.team === 0 ? 1 : 0);
+            engine.lastSetPieceType = null;
             return;
           }
 
-          let accuracy = 0.4 + (this.attr.passing / 20) * 0.5;
+          let accuracy = 0.4 + (this.attr.passing / 20) * 0.5; // up to 0.9
           let passVec = Vector.sub(bestTarget.pos, this.pos).normalize();
           passVec.x += (Math.random() - 0.5) * (1 - accuracy) * 0.8;
           passVec.y += (Math.random() - 0.5) * (1 - accuracy) * 0.8;
+          
           let passLen = this.pos.dist(bestTarget.pos);
-          let power = 4 + (passLen / 100);
-          power = Math.min(9, power * (0.8 + (this.attr.passing / 20) * 0.4));
+          let basePower = Math.min(18, passLen / 10 + 3); 
+          let power = basePower * (0.8 + (this.attr.passing/20)*0.4);
+          
           passVec.normalize().mult(power);
+
           ball.owner = null;
           ball.vel = passVec;
-          if (passLen > 150 && Math.random() < (this.attr.vision / 20)) {
-            let flightTime = passLen / power;
-            ball.vz = Math.min(8, (flightTime * C.GRAVITY) / 2);
-          } else {
-            ball.vz = 0;
-          }
           ball.lastTouch = this;
-          this.cooldown = 25;
+          this.cooldown = 20;
+
           engine.lastSetPieceType = null;
           return;
         }
       }
 
-      // === DRIBBLE (DEFAULT) ===
-      speedMult *= 0.6 + (this.attr.dribbling / 20) * 0.3;
-      if (spaceAhead && !pressured) {
-        target = oppGoalPos.copy();
-      } else if (pressured && !heavilyPressured) {
-        let sideStep = (this.pos.y < goalY) ? 30 : -30;
-        target = new Vector(this.pos.x + (this.team === 0 ? 20 : -20), this.pos.y + sideStep);
-      } else {
-        target = new Vector(this.pos.x + (this.team === 0 ? 5 : -5), this.pos.y);
-      }
+      // === DRIBBLE ===
+      target = new Vector(oppGoalX, goalY);
+      speedMult *= 0.5 + (this.attr.dribbling / 20) * 0.4;
 
-    } else if (ball.owner === null && distToBallGround < ballPickupDistance && this.cooldown <= 0 && ball.z < 20) {
+    } else if (ball.owner === null && distToBall < C.PICKUP_RANGE && this.cooldown <= 0) {
+      // Loose ball
       if (ball.vel.mag() > 5 && this.role !== 'GK' && Math.random() < 0.003) {
         engine.handleHandball(this, ball);
         return;
       }
       ball.owner = this;
       ball.lastTouch = this;
-      if (this.role === 'GK' && isInPenaltyBox(this.pos, this.team)) {
-        this.gkHoldTimer = 600;
-        logEvent(`🧤 GK #${this.number} gathers the ball in hands`, 'action');
-      }
 
     } else if (hasPossession) {
-      // ============================================================
-      // IN POSSESSION (Dynamic Home Positions & Mentality)
-      // ============================================================
       let dir = this.team === 0 ? 1 : -1;
-      let ballX = ball.owner.pos.x;
-      let homePos = this.basePos.copy();
-
-      // Team pushes up based on ball location and Mentality
-      let pushLimit = C.PITCH_W * 0.6;
-      if (this.team === 0) {
-        if (mentality === 'Attack') pushLimit = C.PITCH_W * 0.78;
-        if (mentality === 'Defend') pushLimit = C.PITCH_W * 0.42;
-      }
-      
-      // Prevent defenders/midfielders from pushing out of bounds
-      let pushX = this.team === 0 
-        ? Math.max(80, Math.min(ballX - 100, pushLimit)) 
-        : Math.min(C.PITCH_W - 80, Math.max(ballX + 100, C.PITCH_W * 0.4));
-      
-      if (this.role === 'DEF') {
-        let defMaxX = this.team === 0 ? (mentality === 'Attack' ? C.PITCH_W * 0.6 : mentality === 'Defend' ? C.PITCH_W * 0.3 : C.PITCH_W * 0.45) : C.PITCH_W * 0.55;
-        homePos.x = this.team === 0 ? Math.min(pushX, defMaxX) : Math.max(pushX, C.PITCH_W * 0.55);
-      }
-      if (this.role === 'MID') {
-        homePos.x = pushX;
-      }
-      if (this.role === 'FWD') {
-        let fwdMaxX = this.team === 0 ? (mentality === 'Attack' ? C.PITCH_W * 0.92 : mentality === 'Defend' ? C.PITCH_W * 0.72 : C.PITCH_W * 0.85) : C.PITCH_W * 0.15;
-        homePos.x = this.team === 0 ? Math.min(ballX + 150, fwdMaxX) : Math.max(ballX - 150, C.PITCH_W * 0.15);
-      }
-
       if (this.role === 'GK') {
-        let dist = this.pos.dist(ball.owner.pos);
-        target = dist > 300 ? new Vector(this.basePos.x + dir * 25, this.basePos.y) : this.basePos.copy();
-      } else if (this.role === 'FWD') {
-        let inFinalThird = this.team === 0 ? ballX > C.PITCH_W * 0.6 : ballX < C.PITCH_W * 0.4;
-        if (inFinalThird) {
-           let fwdRank = myTeam.filter(p => p.role === 'FWD').indexOf(this);
-           let channelY = fwdRank === 0 ? C.PITCH_H * 0.3 : C.PITCH_H * 0.7;
-           let runX = this.team === 0 ? Math.min(C.PITCH_W - 50, oppGoalX - 80) : Math.max(50, oppGoalX + 80);
-           target = new Vector(runX, channelY);
-        } else {
-           target = homePos;
-        }
+        target = this.basePos.copy();
+      } else if (this.role === 'DEF') {
+        target = this.basePos.copy();
+        target.x += dir * 50;
       } else {
-        let isGkHolding = ball.owner && ball.owner.role === 'GK' && ball.owner.gkHoldTimer > 0;
-        if (isGkHolding) {
-          let outfield = myTeam.filter(p => p.role !== 'GK');
-          let supporterIdx = [...outfield].sort((a, b) => a.pos.dist(ball.pos) - b.pos.dist(ball.pos)).indexOf(this);
-          if (supporterIdx < 2) {
-             target = new Vector(ball.owner.pos.x + (this.team === 0 ? 60 : -60), ball.owner.pos.y + (supporterIdx === 0 ? -60 : 60));
-          } else {
-             target = homePos;
-          }
-        } else if (tactic === 'Tiki Taka' && this.team === 0 && this.role !== 'GK') {
-          target = new Vector(homePos.x * 0.6 + ball.pos.x * 0.4, homePos.y * 0.6 + ball.pos.y * 0.4);
+        let ahead = (this.team === 0 && this.pos.x > ball.pos.x) || (this.team === 1 && this.pos.x < ball.pos.x);
+        if (ahead) {
+          target = this.basePos.copy();
+          target.x += dir * (80 + this.attr.positioning * 1.5);
         } else {
-          target = homePos;
+          target = ball.pos.copy();
+          target.x -= dir * 60;
+          target.y = this.basePos.y;
         }
       }
-
     } else if (oppHasPossession) {
-      // ============================================================
-      // OUT OF POSSESSION (Compact Defending & Tactics)
-      // ============================================================
-      let oppCarrier = ball.owner;
-      let ballX = oppCarrier.pos.x;
-      let homePos = this.basePos.copy();
-      
-      let isGkHolding = oppCarrier && oppCarrier.role === 'GK' && oppCarrier.gkHoldTimer > 0;
-
-      // Drop back lines: symmetric and bounded
-      let minDrop = (tactic === 'Low Block' && this.team === 0) ? C.PITCH_W * 0.08 : C.PITCH_W * 0.15;
-      let dropX = this.team === 0 
-        ? Math.max(minDrop, Math.min(ballX - 150, C.PITCH_W * 0.55)) 
-        : Math.min(C.PITCH_W * 0.92, Math.max(ballX + 150, C.PITCH_W * 0.45));
-        
-      if (this.role === 'DEF') homePos.x = this.team === 0 ? Math.max(dropX, C.PITCH_W * 0.1) : Math.min(dropX, C.PITCH_W * 0.9);
-      if (this.role === 'MID') homePos.x = this.team === 0 ? Math.max(dropX + 130, C.PITCH_W * 0.25) : Math.min(dropX - 130, C.PITCH_W * 0.75);
-      if (this.role === 'FWD') homePos.x = this.team === 0 ? Math.max(dropX + 250, C.PITCH_W * 0.4) : Math.min(dropX - 250, C.PITCH_W * 0.6);
-
       if (this.role === 'GK') {
-        let gkY = Math.max(C.GOAL_Y + 5, Math.min(C.GOAL_Y + C.GOAL_W - 5, oppCarrier.pos.y));
-        target = new Vector(this.basePos.x, gkY);
-      } else {
-        let outfield = myTeam.filter(p => p.role !== 'GK');
-        let presserIdx = [...outfield].sort((a, b) => a.pos.dist(ball.pos) - b.pos.dist(ball.pos)).indexOf(this);
-        
-        let maxPressers = (tactic === 'Gegenpress' && this.team === 0) ? 4 : (tactic === 'Low Block' && this.team === 0) ? 1 : (this.role === 'FWD' ? 1 : 2);
-        let isPresser = presserIdx < maxPressers;
-
-        // Low Block tactics do not press in opponent's half
-        if (tactic === 'Low Block' && this.team === 0 && ball.pos.x > C.PITCH_W * 0.45) {
-          isPresser = false;
-        }
-
-        // 1 player presses GK holding ball from a distance (3 meters ~ 45px)
-        if (isGkHolding) {
-          if (presserIdx === 0) {
-            isPresser = true;
-          } else {
-            isPresser = false;
+        target = this.basePos.copy();
+        target.y = ball.pos.y;
+        target.y = Math.max(C.GOAL_Y, Math.min(C.GOAL_Y + C.GOAL_W, target.y));
+      } else if (myRank === 0 && this.role !== 'GK') {
+        target = ball.owner.pos.copy();
+        if (distToBall < C.TACKLE_RANGE && this.cooldown <= 0) {
+          if (Math.random() < 0.20) {
+            engine.attemptTackle(this, ball.owner);
           }
+          this.cooldown = 60;
         }
-
-        if (isPresser && distToBallGround < 300) {
-           target = oppCarrier.pos.copy();
-           if (isGkHolding) {
-             let standOff = Vector.sub(this.pos, oppCarrier.pos);
-             if (standOff.mag() === 0) standOff = new Vector((this.team === 0 ? -1 : 1), 0);
-             standOff.normalize().mult(45);
-             target.add(standOff);
-           } else {
-             let tackleRate = (tactic === 'Gegenpress' && this.team === 0) ? 0.45 : 0.2;
-             if (distToBallGround < C.TACKLE_RANGE && this.cooldown <= 0 && Math.random() < tackleRate) {
-               engine.attemptTackle(this, oppCarrier);
-               this.cooldown = (tactic === 'Gegenpress' && this.team === 0) ? 40 : 60;
-             }
-           }
+      } else if (myRank === 1 && this.role !== 'GK') {
+        let dirOwn = this.team === 0 ? -1 : 1;
+        target = ball.owner.pos.copy();
+        target.x += dirOwn * 30;
+      } else {
+        let nearest = [...oppTeam].sort((a, b) => a.pos.dist(this.pos) - b.pos.dist(this.pos))[0];
+        if (nearest && nearest !== ball.owner) {
+          let vGoal = Vector.sub(new Vector(myGoalX, goalY), nearest.pos).normalize();
+          target = nearest.pos.copy().add(vGoal.mult(40));
         } else {
-           // Hold compact defensive shape, stay goal-side of attackers
-           let nearestOpp = [...oppTeam].sort((a, b) => a.pos.dist(this.pos) - b.pos.dist(this.pos))[0];
-           if (nearestOpp && nearestOpp.role !== 'GK' && nearestOpp.pos.dist(homePos) < 150) {
-             let goalDir = Vector.sub(new Vector(myGoalX, goalY), nearestOpp.pos).normalize();
-             target = nearestOpp.pos.copy().add(goalDir.mult(20)); // Stay 20px goal-side
-             target.x = this.team === 0 ? Math.max(target.x, homePos.x) : Math.min(target.x, homePos.x); // Maintain depth
-           } else {
-             target = homePos;
-           }
+          let dirOwn = this.team === 0 ? -1 : 1;
+          target = this.basePos.copy();
+          target.x += dirOwn * 50;
         }
       }
-
     } else {
-      // ============================================================
-      // LOOSE BALL
-      // ============================================================
-      let homePos = this.basePos.copy();
       if (this.role === 'GK') {
-        let gkY = Math.max(C.GOAL_Y + 5, Math.min(C.GOAL_Y + C.GOAL_W - 5, ball.pos.y));
-        target = new Vector(this.basePos.x, gkY);
-      } else if (myRank === 0) {
-        let interceptTime = distToBallGround / (C.MAX_SPEED * 1.2);
-        let predictedX = ball.pos.x + ball.vel.x * interceptTime;
-        let predictedY = ball.pos.y + ball.vel.y * interceptTime;
-        predictedX = Math.max(20, Math.min(C.PITCH_W - 20, predictedX));
-        predictedY = Math.max(20, Math.min(C.PITCH_H - 20, predictedY));
-        target = new Vector(predictedX, predictedY);
+        target = this.basePos.copy();
+        target.y = ball.pos.y;
+        target.y = Math.max(C.GOAL_Y, Math.min(C.GOAL_Y + C.GOAL_W, target.y));
+      } else if (myRank === 0 || myRank === 1) {
+        target = ball.pos.copy();
       } else {
-        let ballX = ball.pos.x;
-        let pushX = this.team === 0 ? Math.min(ballX - 50, C.PITCH_W * 0.5) : Math.max(ballX + 50, C.PITCH_W * 0.5);
-        if (this.role === 'DEF') homePos.x = this.team === 0 ? Math.min(pushX, C.PITCH_W * 0.3) : Math.max(pushX, C.PITCH_W * 0.7);
-        if (this.role === 'MID') homePos.x = pushX;
-        if (this.role === 'FWD') homePos.x = this.team === 0 ? Math.min(ballX + 100, C.PITCH_W * 0.7) : Math.max(ballX - 100, C.PITCH_W * 0.3);
-        target = homePos;
+        target = this.basePos.copy();
       }
     }
 
-    // GK SAVE (Checks 3D position now)
-    if (this.role === 'GK' && ball.owner === null && distToBallGround < 40 && ball.vel.mag() > 2 && ball.z < 40 && this.cooldown <= 0) {
+    // GK SAVE
+    if (this.role === 'GK' && ball.owner === null && distToBall < 40 && ball.vel.mag() > 3) {
       let catchProb = (this.attr.goalkeeping / 20) * 0.6; 
-      let saveProb = 0.3 + (this.attr.goalkeeping / 20) * 0.5; // Slightly reduced to allow more goals
+      let saveProb = 0.3 + (this.attr.goalkeeping / 20) * 0.6; 
       
-      this.cooldown = 45; // GK commits to the dive/save
       if (Math.random() < saveProb) {
-        if (Math.random() < catchProb && ball.vel.mag() < 8) { // Only catch if not a rocket
+        if (Math.random() < catchProb && ball.vel.mag() < 15) {
           ball.vel.mult(0);
-          ball.vz = 0;
-          ball.z = 0;
           ball.owner = this;
           ball.lastTouch = this;
-          this.gkHoldTimer = 210; // start GK holding phase (3.5s)
-          logEvent(`🧤 GK #${this.number} catches securely!`, 'action');
+          logEvent(\\\`🧤 GK #\\\${this.number} catches securely!\\\`, 'action');
           this.cooldown = 15;
         } else {
           let toCorner = Math.random() < 0.7;
           if (toCorner) {
             ball.vel.mult(0.6);
-            ball.vel.y = (Math.random() > 0.5 ? 6 : -6);
-            ball.vel.x = this.team === 0 ? -3 : 3;
-            ball.vz = 2; // deflected up slightly
-            logEvent(`🧤 GK #${this.number} parries out for a corner!`, 'action');
+            ball.vel.y = (Math.random() > 0.5 ? 10 : -10);
+            ball.vel.x = this.team === 0 ? -5 : 5;
+            logEvent(\\\`🧤 GK #\\\${this.number} parries out for a corner!\\\`, 'action');
           } else {
             ball.vel.mult(-0.3);
             ball.vel.y += (Math.random() - 0.5) * 5;
-            ball.vz = 1 + Math.random()*2;
-            logEvent(`🧤 GK #${this.number} parries the ball into play!`, 'action');
+            logEvent(\\\`🧤 GK #\\\${this.number} parries the ball into play!\\\`, 'action');
           }
           ball.lastTouch = this;
           this.cooldown = 15;
         }
-      } else {
-        logEvent(`🧤 GK #${this.number} dives but is beaten!`, 'action');
       }
     }
-
-    // Safety clamp target within pitch boundaries (at least 35px margin to keep players inside the lines)
-    target.x = Math.max(35, Math.min(C.PITCH_W - 35, target.x));
-    target.y = Math.max(35, Math.min(C.PITCH_H - 35, target.y));
 
     if (this.role !== 'GK') {
       let rep = new Vector(0, 0);
@@ -768,9 +445,10 @@ class Player {
       this.vel.mult(0.92);
     }
 
-    // Safe clamp for player actual position (at least 20px inside the lines)
-    this.pos.x = Math.max(20, Math.min(C.PITCH_W - 20, this.pos.x));
-    this.pos.y = Math.max(20, Math.min(C.PITCH_H - 20, this.pos.y));
+    // Remove strict clamping if out of bounds state active?
+    // Player should stay within bounds
+    this.pos.x = Math.max(0, Math.min(C.PITCH_W, this.pos.x));
+    this.pos.y = Math.max(0, Math.min(C.PITCH_H, this.pos.y));
   }
 
   draw() {
@@ -783,15 +461,12 @@ class Player {
     }
     this.textObj.setVisible(true);
 
-    g.fillStyle(0x000000, 0.3);
-    g.fillEllipse(this.pos.x + 3, this.pos.y + 4, C.PLAYER_R * 1.6, C.PLAYER_R * 1.2);
+    g.fillStyle(0x000000, 0.2);
+    g.fillEllipse(this.pos.x, this.pos.y + C.PLAYER_R, C.PLAYER_R * 1.6, 6);
 
     g.fillStyle(this.colorHex, 1);
     g.fillCircle(this.pos.x, this.pos.y, C.PLAYER_R);
-    
-    g.lineStyle(2, 0xffffff, 0.3);
-    g.strokeCircle(this.pos.x, this.pos.y, C.PLAYER_R - 1);
-    g.lineStyle(1, 0x000000, 0.8);
+    g.lineStyle(1, 0x000000, 0.3);
     g.strokeCircle(this.pos.x, this.pos.y, C.PLAYER_R);
 
     this.textObj.setPosition(this.pos.x, this.pos.y);
@@ -1001,8 +676,8 @@ class FoulSystem {
     };
 
     if (severity <= 40) {
-      let tackleScore = tackler.tacklingAbility; 
-      let dribbleScore = carrier.attr.dribbling * 3 + carrier.attr.strength * 2; 
+      let tackleScore = tackler.tacklingAbility; // Max ~100
+      let dribbleScore = carrier.attr.dribbling * 3 + carrier.attr.strength * 2; // Max ~100
       let successChance = Math.max(10, Math.min(90, tackleScore - dribbleScore * 0.5 + 30));
       result.tackleSuccess = Math.random() * 100 < successChance;
       return result;
@@ -1108,7 +783,7 @@ class OffsideSystem {
     let diff = passer.team === 0 ? receiver.pos.x - ol : ol - receiver.pos.x;
     if (diff <= 2) return { isOffside: false };
 
-    return { isOffside: diff > 0, offsideLineX: ol, offsidePos: receiver.pos.copy() };
+    return { isOffside: diff > 0, offsideLineX: ol };
   }
 }
 
@@ -1150,20 +825,20 @@ class AdvantageSystem {
         player.cardFlash = { type: 'YELLOW', timer: 90 };
         engine.referee.showCard('YELLOW');
         engine.stats[tk].yellows++;
-        logEvent(`⏳ Delayed 🟨 for #${player.number} (${reason})`, 'card');
+        logEvent(\\\`⏳ Delayed 🟨 for #\\\${player.number} (\\\${reason})\\\`, 'card');
         if (player.yellowCards >= 2) {
           player.redCard = true; player.sentOff = true;
           player.cardFlash = { type: 'RED', timer: 120 };
           engine.referee.showCard('RED');
           engine.stats[tk].reds++;
-          logEvent(`🟥 SECOND YELLOW! #${player.number} SENT OFF!`, 'red');
+          logEvent(\\\`🟥 SECOND YELLOW! #\\\${player.number} SENT OFF!\\\`, 'red');
         }
       } else if (card === 'RED') {
         player.redCard = true; player.sentOff = true;
         player.cardFlash = { type: 'RED', timer: 120 };
         engine.referee.showCard('RED');
         engine.stats[tk].reds++;
-        logEvent(`⏳ Delayed 🟥 for #${player.number} (${reason})`, 'red');
+        logEvent(\\\`⏳ Delayed 🟥 for #\\\${player.number} (\\\${reason})\\\`, 'red');
       }
     });
     this.pendingCards = [];
@@ -1202,7 +877,7 @@ class VARSystem {
       this.reviewTimer = 180 + Math.floor(Math.random() * 420);
       this.reviewType = type;
       this.reviewData = data;
-      logEvent(`📺 VAR REVIEW: Checking ${type}…`, 'var');
+      logEvent(\\\`📺 VAR REVIEW: Checking \\\${type}…\\\`, 'var');
       return true;
     }
     return false;
@@ -1220,10 +895,10 @@ class VARSystem {
       this.reviewData = null;
 
       if (confirm) {
-        logEvent(`📺 VAR: ✅ CONFIRMED — ${type}`, 'var');
+        logEvent(\\\`📺 VAR: ✅ CONFIRMED — \\\${type}\\\`, 'var');
         return { decision: 'CONFIRM', type, data };
       } else {
-        logEvent(`📺 VAR: ❌ OVERTURNED — ${type}`, 'var');
+        logEvent(\\\`📺 VAR: ❌ OVERTURNED — \\\${type}\\\`, 'var');
         engine.handleVAROverturned(type, data);
         return { decision: 'OVERTURN', type, data };
       }
@@ -1244,7 +919,7 @@ class VARSystem {
     g.lineStyle(2, 0x00ffff, 1);
     g.strokeRect(C.PITCH_W / 2 - 110, 8, 220, 34);
 
-    this.textObj.setText(`📺 VAR REVIEW: ${this.reviewType}`);
+    this.textObj.setText(\\\`📺 VAR REVIEW: \\\${this.reviewType}\\\`);
     this.textObj.setVisible(true);
 
     g.lineStyle(1, 0x00ffff, 0.12 * alpha);
@@ -1267,7 +942,7 @@ class MatchEngine {
     this.advantageSystem = new AdvantageSystem();
     this.varSystem = new VARSystem();
 
-    this.state = 'STOPPED'; 
+    this.state = 'STOPPED'; // PLAYING, STOPPED, SET_PIECE, OUT_OF_BOUNDS
     this.time = 0;
     this.half = 1;
     this.score = { home: 0, away: 0 };
@@ -1329,110 +1004,18 @@ class MatchEngine {
     ];
     hPos.forEach((p,i) => this.players.push(new Player(0, i+1, p[2], p[0], p[1], hC)));
     aPos.forEach((p,i) => this.players.push(new Player(1, i+1, p[2], p[0], p[1], aC)));
-
-    // Initialize tactical values from Manager UI or defaults
-    const sf = document.getElementById('select-formation');
-    const st = document.getElementById('select-tactic');
-    const sm = document.getElementById('select-mentality');
-
-    this.homeFormation = sf ? sf.value : '4-4-2';
-    this.homeTactic = st ? st.value : 'Mixed';
-    this.homeMentality = sm ? sm.value : 'Balanced';
-
-    this.applyHomeFormation(this.homeFormation);
   }
 
-  applyHomeFormation(formation) {
-    this.homeFormation = formation;
-    let hPos;
-    if (formation === '4-3-3') {
-      hPos = [
-        [50,250,'GK'],
-        [200,80,'DEF'],[150,180,'DEF'],[150,320,'DEF'],[200,420,'DEF'],
-        [300,120,'MID'],[270,250,'MID'],[300,380,'MID'],
-        [420,100,'FWD'],[440,250,'FWD'],[420,400,'FWD']
-      ];
-    } else if (formation === '3-5-2') {
-      hPos = [
-        [50,250,'GK'],
-        [180,130,'DEF'],[150,250,'DEF'],[180,370,'DEF'],
-        [350,70,'MID'],[300,160,'MID'],[320,250,'MID'],[300,340,'MID'],[350,430,'MID'],
-        [420,190,'FWD'],[420,310,'FWD']
-      ];
-    } else { // '4-4-2' default
-      hPos = [
-        [50,250,'GK'],
-        [200,80,'DEF'],[150,180,'DEF'],[150,320,'DEF'],[200,420,'DEF'],
-        [350,100,'MID'],[300,200,'MID'],[300,300,'MID'],[350,400,'MID'],
-        [420,190,'FWD'],[420,310,'FWD']
-      ];
-    }
-
-    // Apply to home players (team 0)
-    let homePlayers = this.players.filter(p => p.team === 0);
-    homePlayers.forEach((p, idx) => {
-      let config = hPos[idx];
-      if (config) {
-        p.role = config[2];
-        p.basePos = new Vector(config[0], config[1]);
-        p.attr = generateAttributes(p.role); // refresh attributes for new role
-        
-        // If match hasn't started or is stopped/set piece, move player to base position immediately
-        if (this.state !== 'PLAYING') {
-          p.pos = p.basePos.copy();
-          p.vel.mult(0);
-        }
-      }
-    });
-    logEvent(`📋 Home Team adjusted to ${formation} formation`, 'setpiece');
-  }
-
-  resetKickoff(kickingTeam = 0) {
+  resetKickoff() {
     this.ball.owner = null;
     this.ball.lastTouch = null;
     this.ball.pos = new Vector(C.PITCH_W/2, C.PITCH_H/2);
     this.ball.vel = new Vector(0,0);
-    this.ball.z = 0;
-    this.ball.vz = 0;
     this.players.forEach(p => {
       if (!p.sentOff) { p.pos = p.basePos.copy(); p.vel.mult(0); p.cooldown = 0; }
     });
     this.lastSetPieceType = null;
     this.penaltyState = null;
-
-    // FIFA kickoff: kicking team's center forward kicks off
-    // Only players of the kicking team can be in their half (others must be in own half)
-    this.state = 'SET_PIECE';
-    this.setPieceTimer = 90; // short delay before kickoff pass
-    this.lastSetPieceType = 'KICKOFF';
-
-    // Find the two FWDs of the kicking team for kickoff
-    let kt = this.getActivePlayers(kickingTeam);
-    let fwds = kt.filter(p => p.role === 'FWD');
-    let kicker = fwds[0] || kt.find(p => p.role === 'MID');
-    let receiver = fwds[1] || kt.find(p => p.role === 'MID' && p !== kicker);
-
-    if (kicker) {
-      kicker.pos = new Vector(C.PITCH_W/2 + (kickingTeam === 0 ? -12 : 12), C.PITCH_H/2);
-      this.ball.owner = kicker;
-    }
-    if (receiver) {
-      receiver.pos = new Vector(C.PITCH_W/2 + (kickingTeam === 0 ? -30 : 30), C.PITCH_H/2 + 40);
-    }
-
-    // Force opponents to their own half
-    let ot = this.getActivePlayers(kickingTeam === 0 ? 1 : 0);
-    ot.forEach(p => {
-      if (kickingTeam === 0 && p.pos.x < C.PITCH_W/2) p.pos.x = C.PITCH_W/2 + 5;
-      if (kickingTeam === 1 && p.pos.x > C.PITCH_W/2) p.pos.x = C.PITCH_W/2 - 5;
-    });
-
-    // Force kicking team to their own half (except kickers)
-    kt.forEach(p => {
-      if (p === kicker || p === receiver) return;
-      if (kickingTeam === 0 && p.pos.x > C.PITCH_W/2) p.pos.x = C.PITCH_W/2 - 5;
-      if (kickingTeam === 1 && p.pos.x < C.PITCH_W/2) p.pos.x = C.PITCH_W/2 + 5;
-    });
   }
 
   triggerSetPiece(type, pos, teamToTake) {
@@ -1441,8 +1024,6 @@ class MatchEngine {
     this.lastSetPieceType = type;
     this.ball.owner = null;
     this.ball.vel.mult(0);
-    this.ball.z = 0;
-    this.ball.vz = 0;
     this.ball.pos = pos.copy();
     this.advantageSystem.onStoppage(this);
     this.referee.whistleTimer = 60;
@@ -1459,6 +1040,7 @@ class MatchEngine {
       this.ball.owner = taker;
     }
     
+    // Setup initial positions for corner or throw in
     this.players.forEach(p => {
       if (p === taker || p.sentOff || p.role === 'GK') return;
       if (type === 'CORNER') {
@@ -1485,8 +1067,6 @@ class MatchEngine {
 
     this.ball.pos = new Vector(spotX, C.PITCH_H/2);
     this.ball.vel.mult(0);
-    this.ball.z = 0;
-    this.ball.vz = 0;
     this.ball.owner = null;
 
     let att = this.getActivePlayers(teamToTake).filter(p => p.role !== 'GK');
@@ -1508,7 +1088,7 @@ class MatchEngine {
       }
     });
 
-    logEvent(`⚽ PENALTY! #${kicker ? kicker.number : '?'} steps up`, 'penalty');
+    logEvent(\\\`⚽ PENALTY! #\\\${kicker ? kicker.number : '?'} steps up\\\`, 'penalty');
   }
 
   executePenalty() {
@@ -1519,8 +1099,8 @@ class MatchEngine {
     let oppTeam = ps.team === 0 ? 1 : 0;
     let goalX = oppTeam === 0 ? 0 : C.PITCH_W;
 
-    let fScore = (kicker.attr.finishing + kicker.attr.composure) / 2; 
-    let gScore = gk.attr.goalkeeping; 
+    let fScore = (kicker.attr.finishing + kicker.attr.composure) / 2; // 1-20
+    let gScore = gk.attr.goalkeeping; // 1-20
 
     let zones = ['LEFT','CENTER','RIGHT'];
     let shotZone = zones[Math.floor(Math.random() * 3)];
@@ -1529,7 +1109,7 @@ class MatchEngine {
     shotY += (Math.random()-0.5) * (20 - kicker.attr.composure) * 2;
 
     let dir = new Vector(goalX - this.ball.pos.x, shotY - this.ball.pos.y).normalize();
-    let power = 8 + kicker.attr.finishing / 3;
+    let power = 10 + kicker.attr.finishing / 2;
     this.ball.vel = dir.mult(power);
     this.ball.owner = null;
     this.ball.lastTouch = kicker;
@@ -1545,14 +1125,14 @@ class MatchEngine {
       this.ball.vel.mult(0.1);
       this.ball.vel.y = (Math.random()-0.5) * 5;
       this.ball.lastTouch = gk;
-      logEvent(`🧤 SAVED! GK #${gk.number} dives ${gkDive}!`, 'action');
+      logEvent(\\\`🧤 SAVED! GK #\\\${gk.number} dives \\\${gkDive}!\\\`, 'action');
     } else {
       let onTarget = Math.random() < (fScore / 20 * 0.9 + 0.1);
       if (!onTarget) {
         this.ball.vel.y += (Math.random()-0.5) * 10;
-        logEvent(`💨 MISS! #${kicker.number}'s penalty goes wide!`, 'action');
+        logEvent(\\\`💨 MISS! #\\\${kicker.number}'s penalty goes wide!\\\`, 'action');
       } else {
-        logEvent(`💥 #${kicker.number} strikes the penalty!`, 'action');
+        logEvent(\\\`💥 #\\\${kicker.number} strikes the penalty!\\\`, 'action');
       }
     }
 
@@ -1564,131 +1144,51 @@ class MatchEngine {
   executeSetPiece() {
     let taker = this.ball.owner;
     if (!taker) { this.state = 'PLAYING'; return; }
-
+    
     let type = this.lastSetPieceType;
+    let target = null;
     let teammates = this.getActivePlayers(taker.team).filter(p => p !== taker && p.role !== 'GK');
-    let oppPlayers = this.getActivePlayers(taker.team === 0 ? 1 : 0);
-
-    // ---- KICKOFF: short pass to nearby teammate in center circle ----
-    if (type === 'KICKOFF') {
-      let receiver = teammates.find(p => p.pos.dist(new Vector(C.PITCH_W/2, C.PITCH_H/2)) < 80 && p !== taker);
-      if (!receiver) receiver = teammates.sort((a,b) => a.pos.dist(taker.pos) - b.pos.dist(taker.pos))[0];
-      if (receiver) {
-        let passVec = Vector.sub(receiver.pos, taker.pos).normalize().mult(3 + Math.random());
-        this.ball.vel = passVec;
-        this.ball.vz = 0;
-        logEvent(`⚽ Kickoff! #${taker.number} passes to #${receiver.number}`, 'action');
-      }
-      taker.cooldown = 30;
-      this.ball.owner = null;
-      this.ball.lastTouch = taker;
-      this.state = 'PLAYING';
-      this.lastSetPieceType = null;
-      return;
-    }
 
     if (type === 'THROW_IN') {
       teammates.sort((a,b) => a.pos.dist(taker.pos) - b.pos.dist(taker.pos));
-      let target = teammates[0];
+      target = teammates[0];
       if (target) {
         let passVec = Vector.sub(target.pos, taker.pos).normalize();
-        if (Math.random() < 0.15) {
-          passVec.x += (Math.random()-0.5)*1.5;
-          passVec.y += (Math.random()-0.5)*1.5;
+        if (Math.random() < 0.15) { // 15% fail chance under pressure
+           passVec.x += (Math.random()-0.5)*1.5;
+           passVec.y += (Math.random()-0.5)*1.5;
         }
-        this.ball.vel = passVec.normalize().mult(4);
-        this.ball.vz = 1;
-        logEvent(`👐 #${taker.number} throws it in.`, 'action');
+        this.ball.vel = passVec.normalize().mult(6); // hand throw is slower
+        logEvent(\\\`👐 #\\\${taker.number} throws it in.\\\`, 'action');
       }
-
     } else if (type === 'CORNER') {
       let oppGoalX = taker.team === 0 ? C.PITCH_W : 0;
-      let crossTarget = new Vector(oppGoalX + (taker.team === 0 ? -40 : 40), C.PITCH_H/2 + (Math.random()-0.5)*80);
-      let passVec = Vector.sub(crossTarget, taker.pos).normalize();
-      this.ball.vel = passVec.mult(8);
-      this.ball.vz = 4 + Math.random()*2;
-      logEvent(`🚩 #${taker.number} crosses the corner!`, 'action');
-
-    } else if (type === 'FREE_KICK') {
-      // --- FREE KICK LOGIC ---
+      target = new Vector(oppGoalX + (taker.team === 0 ? -40 : 40), C.PITCH_H/2 + (Math.random()-0.5)*80);
+      let passVec = Vector.sub(target, taker.pos).normalize();
+      this.ball.vel = passVec.mult(12); // fast cross
+      logEvent(\\\`🚩 #\\\${taker.number} crosses the corner!\\\`, 'action');
+    } else {
+      // FREE KICK / GOAL KICK
       let oppGoalX = taker.team === 0 ? C.PITCH_W : 0;
       let distToGoal = taker.pos.dist(new Vector(oppGoalX, C.PITCH_H/2));
-
-      // Build a defensive WALL from the opponent team
-      // (3-5 players line up between ball and goal)
-      let wallPlayers = oppPlayers.filter(p => p.role !== 'GK').sort(
-        (a,b) => a.pos.dist(taker.pos) - b.pos.dist(taker.pos)
-      ).slice(0, Math.min(5, Math.floor(distToGoal / 50)));
-
-      wallPlayers.forEach((wp, idx) => {
-        // Line up perpendicular to the kick direction, 9.15m (scaled ~35px) from ball
-        let wallDir = Vector.sub(new Vector(oppGoalX, C.PITCH_H/2), taker.pos).normalize();
-        let wallCenter = taker.pos.copy().add(wallDir.copy().mult(35));
-        let perp = new Vector(-wallDir.y, wallDir.x);
-        let offset = (idx - (wallPlayers.length - 1) / 2) * 10;
-        wp.pos = wallCenter.copy().add(perp.mult(offset));
-        wp.vel.mult(0);
-        wp.cooldown = 80;
-      });
-
-      // Remaining defenders hold positions between ball and goal (zonal)
-      oppPlayers.filter(p => !wallPlayers.includes(p) && p.role !== 'GK').forEach(p => {
-        // Position goal-side and mark nearby attackers
-        let attackerNear = teammates.sort((a,b) => a.pos.dist(p.pos) - b.pos.dist(p.pos))[0];
-        if (attackerNear) {
-          let goalDir2 = Vector.sub(new Vector(oppGoalX, C.PITCH_H/2), attackerNear.pos).normalize();
-          p.pos = attackerNear.pos.copy().add(goalDir2.mult(20));
-          p.pos.x = Math.max(2, Math.min(C.PITCH_W-2, p.pos.x));
-          p.pos.y = Math.max(2, Math.min(C.PITCH_H-2, p.pos.y));
-        }
-        p.vel.mult(0);
-        p.cooldown = 60;
-      });
-
-      // Decision: shoot directly or pass to teammate
-      let shootDirect = distToGoal < 200 && Math.random() < 0.55;
-      if (shootDirect) {
-        let targetY = C.PITCH_H/2 + (Math.random()-0.5) * C.GOAL_W * 0.7;
-        // Try to curve around wall
-        let wallMidY = wallPlayers.length > 0
-          ? wallPlayers.reduce((s,w) => s + w.pos.y, 0) / wallPlayers.length
-          : C.PITCH_H/2;
-        let curveY = targetY + (C.PITCH_H/2 - wallMidY) * 0.3;
-        let passVec = new Vector(oppGoalX - taker.pos.x, curveY - taker.pos.y).normalize();
-        this.ball.vel = passVec.mult(8 + taker.attr.finishing/4);
-        this.ball.vz = 2 + Math.random();
-        logEvent(`💥 #${taker.number} curls it toward goal!`, 'action');
+      
+      if (type === 'FREE_KICK' && distToGoal < 220 && Math.random() < 0.6) {
+         // Shot
+         let targetY = C.PITCH_H/2 + (Math.random()-0.5) * C.GOAL_W * 0.8;
+         let passVec = new Vector(oppGoalX - taker.pos.x, targetY - taker.pos.y).normalize();
+         this.ball.vel = passVec.mult(15 + taker.attr.finishing/4);
+         logEvent(\\\`💥 #\\\${taker.number} takes a direct free kick!\\\`, 'action');
       } else {
-        // Pass to the most forward, open teammate
-        let target = teammates.filter(t => {
-          let nearOpp = oppPlayers.reduce((m,o) => Math.min(m, o.pos.dist(t.pos)), Infinity);
-          return nearOpp > 30;
-        }).sort((a,b) => {
-          let fwdA = taker.team === 0 ? a.pos.x : -a.pos.x;
-          let fwdB = taker.team === 0 ? b.pos.x : -b.pos.x;
-          return fwdB - fwdA;
-        })[0];
-        if (target) {
-          let passVec = Vector.sub(target.pos, taker.pos).normalize();
-          this.ball.vel = passVec.mult(6 + taker.attr.passing/4);
-          this.ball.vz = 0;
-          logEvent(`👟 #${taker.number} plays it short from free kick.`, 'action');
-        } else {
-          this.ball.vel = new Vector(taker.team===0?1:-1, 0).mult(5);
-        }
-      }
-
-    } else {
-      // GOAL KICK
-      teammates.sort((a,b) => a.pos.dist(new Vector(taker.team===0?C.PITCH_W:0, C.PITCH_H/2)) - b.pos.dist(new Vector(taker.team===0?C.PITCH_W:0, C.PITCH_H/2)));
-      let target = teammates[Math.floor(Math.random()*3)];
-      if (target) {
-        let passVec = Vector.sub(target.pos, taker.pos).normalize();
-        this.ball.vel = passVec.mult(7 + taker.attr.passing/4);
-        this.ball.vz = 5;
-        logEvent(`⬆️ #${taker.number} takes the goal kick.`, 'action');
-      } else {
-        this.ball.vel = new Vector(taker.team===0?1:-1, 0).mult(7);
+         // Pass
+         teammates.sort((a,b) => a.pos.dist(new Vector(oppGoalX, C.PITCH_H/2)) - b.pos.dist(new Vector(oppGoalX, C.PITCH_H/2)));
+         target = teammates[Math.floor(Math.random()*3)];
+         if (target) {
+            let passVec = Vector.sub(target.pos, taker.pos).normalize();
+            this.ball.vel = passVec.mult(10 + taker.attr.passing/4);
+            logEvent(\\\`👟 #\\\${taker.number} takes the \\\${type.replace('_',' ')}.\\\`, 'action');
+         } else {
+            this.ball.vel = new Vector(taker.team===0?1:-1, 0).mult(8);
+         }
       }
     }
 
@@ -1696,7 +1196,6 @@ class MatchEngine {
     this.ball.owner = null;
     this.ball.lastTouch = taker;
     this.state = 'PLAYING';
-    if (type !== 'KICKOFF') this.lastSetPieceType = null;
   }
 
   attemptTackle(tackler, carrier) {
@@ -1705,9 +1204,9 @@ class MatchEngine {
     if (!result.isFoul) {
       if (result.tackleSuccess) {
         this.ball.owner = null;
-        this.ball.vel = new Vector((Math.random()-0.5)*4, (Math.random()-0.5)*4);
+        this.ball.vel = new Vector((Math.random()-0.5)*8, (Math.random()-0.5)*8);
         this.ball.lastTouch = tackler;
-        logEvent(`💪 #${tackler.number} wins the ball!`, 'action');
+        logEvent(\\\`💪 #\\\${tackler.number} wins the ball!\\\`, 'action');
       } else {
         tackler.cooldown = 30;
       }
@@ -1717,10 +1216,10 @@ class MatchEngine {
     tackler.foulCount++;
     let tk = tackler.team === 0 ? 'home' : 'away';
     this.stats[tk].fouls++;
-    logEvent(`⚠️ FOUL by #${tackler.number} on #${carrier.number} (${result.reason})`, 'foul');
+    logEvent(\\\`⚠️ FOUL by #\\\${tackler.number} on #\\\${carrier.number} (\\\${result.reason})\\\`, 'foul');
 
     if (result.card !== 'RED' && !result.isPenalty && this.advantageSystem.evaluate(carrier.team, carrier.pos, this)) {
-      logEvent(`▶️ Advantage played!`, 'advantage');
+      logEvent(\\\`▶️ Advantage played!\\\`, 'advantage');
       this.advantageSystem.advantageActive = true;
       this.advantageSystem.advantageTeam = carrier.team;
       this.advantageSystem.advantageTimer = 180;
@@ -1750,21 +1249,21 @@ class MatchEngine {
       player.cardFlash = { type: 'YELLOW', timer: 90 };
       this.referee.showCard('YELLOW');
       this.stats[tk].yellows++;
-      logEvent(`🟨 YELLOW CARD #${player.number}!`, 'card');
+      logEvent(\\\`🟨 YELLOW CARD #\\\${player.number}!\\\`, 'card');
 
       if (player.yellowCards >= 2) {
         player.redCard = true; player.sentOff = true;
         player.cardFlash = { type: 'RED', timer: 120 };
         this.referee.showCard('RED');
         this.stats[tk].reds++;
-        logEvent(`🟥 SECOND YELLOW! #${player.number} SENT OFF!`, 'red');
+        logEvent(\\\`🟥 SECOND YELLOW! #\\\${player.number} SENT OFF!\\\`, 'red');
       }
     } else if (card === 'RED') {
       player.redCard = true; player.sentOff = true;
       player.cardFlash = { type: 'RED', timer: 120 };
       this.referee.showCard('RED');
       this.stats[tk].reds++;
-      logEvent(`🟥 RED CARD! #${player.number} SENT OFF! (${reason})`, 'red');
+      logEvent(\\\`🟥 RED CARD! #\\\${player.number} SENT OFF! (\\\${reason})\\\`, 'red');
       this.varSystem.checkEvent('RED_CARD', { player }, this);
     }
   }
@@ -1779,7 +1278,7 @@ class MatchEngine {
     let tk = player.team === 0 ? 'home' : 'away';
     this.stats[tk].fouls++;
     player.foulCount++;
-    logEvent(`🤚 HANDBALL by #${player.number}! (${result.reason})`, 'foul');
+    logEvent(\\\`🤚 HANDBALL by #\\\${player.number}! (\\\${result.reason})\\\`, 'foul');
 
     this.giveCard(player, result.card, result.reason);
 
@@ -1796,11 +1295,11 @@ class MatchEngine {
     if (type === 'GOAL') {
       let t = data.team;
       this.score[t]--;
-      document.getElementById(`score-${t}`).innerText = this.score[t];
-      logEvent(`❌ GOAL DISALLOWED by VAR!`, 'var');
-      setTimeout(() => { this.resetKickoff(0); }, 1500);
+      document.getElementById(\\\`score-\\\${t}\\\`).innerText = this.score[t];
+      logEvent(\\\`❌ GOAL DISALLOWED by VAR!\\\`, 'var');
+      setTimeout(() => { this.resetKickoff(); this.state = 'PLAYING'; }, 1500);
     } else if (type === 'PENALTY') {
-      logEvent(`❌ PENALTY OVERTURNED by VAR`, 'var');
+      logEvent(\\\`❌ PENALTY OVERTURNED by VAR\\\`, 'var');
       this.penaltyState = null;
     } else if (type === 'RED_CARD') {
       let p = data.player;
@@ -1810,7 +1309,7 @@ class MatchEngine {
         p.cardFlash = { type: 'YELLOW', timer: 90 };
         let tk = p.team === 0 ? 'home' : 'away';
         this.stats[tk].reds--; this.stats[tk].yellows++;
-        logEvent(`📺 VAR: Red → YELLOW for #${p.number}`, 'var');
+        logEvent(\\\`📺 VAR: Red → YELLOW for #\\\${p.number}\\\`, 'var');
       }
     }
   }
@@ -1818,7 +1317,7 @@ class MatchEngine {
   handleVARResult(result) {
     if (result.type === 'GOAL') {
       if (result.decision === 'CONFIRM') {
-        setTimeout(() => { this.resetKickoff(0); }, 1500);
+        setTimeout(() => { this.resetKickoff(); this.state = 'PLAYING'; }, 1500);
       }
     } else if (result.type === 'PENALTY') {
       if (result.decision === 'OVERTURN') {
@@ -1844,23 +1343,23 @@ class MatchEngine {
     let gyS = C.GOAL_Y, gyE = C.GOAL_Y + C.GOAL_W;
     let bpx = this.ball.pos.x, bpy = this.ball.pos.y;
 
-    if ((bpx < 0 || bpx > C.PITCH_W) && bpy > gyS && bpy < gyE && this.ball.z < 30) {
+    // Check goal
+    if ((bpx < 0 || bpx > C.PITCH_W) && bpy > gyS && bpy < gyE) {
       let teamScored = bpx > C.PITCH_W ? 'home' : 'away';
-      let scoredByTeam = teamScored === 'home' ? 0 : 1;
-      let kickingTeamAfterGoal = scoredByTeam === 0 ? 1 : 0; // Opposition kicks off
       this.score[teamScored]++;
-      document.getElementById(`score-${teamScored}`).innerText = this.score[teamScored];
-      logEvent(`⚽ GOOOAL for ${teamScored.toUpperCase()}! 🎉`, 'goal');
+      document.getElementById(\\\`score-\\\${teamScored}\\\`).innerText = this.score[teamScored];
+      logEvent(\\\`⚽ GOOOAL for \\\${teamScored.toUpperCase()}! 🎉\\\`, 'goal');
       this.state = 'STOPPED';
       this.advantageSystem.onStoppage(this);
       if (!this.varSystem.checkEvent('GOAL', { team: teamScored }, this)) {
-        setTimeout(() => { this.resetKickoff(kickingTeamAfterGoal); }, 2000);
+        setTimeout(() => { this.resetKickoff(); this.state = 'PLAYING'; }, 2000);
       }
       return;
     }
 
+    // Normal out of bounds
     this.state = 'OUT_OF_BOUNDS';
-    this.outOfBoundsTimer = 60; 
+    this.outOfBoundsTimer = 60; // 1 second rolling
     this.referee.whistleTimer = 30;
 
     let lastTeam = this.ball.lastTouch ? this.ball.lastTouch.team : 0;
@@ -1911,8 +1410,8 @@ class MatchEngine {
       this.advantageSystem.update();
 
       if (this.state === 'OUT_OF_BOUNDS') {
-        this.ball.update(); 
-        this.players.forEach(p => p.update(this)); 
+        this.ball.update(); // Let ball roll out
+        this.players.forEach(p => p.update(this)); // allow limited movement
         this.outOfBoundsTimer--;
         if (this.outOfBoundsTimer <= 0) {
           this.triggerSetPiece(this.nextSetPiece.type, this.nextSetPiece.pos, this.nextSetPiece.team);
@@ -1947,10 +1446,7 @@ class MatchEngine {
         this.state = 'HALF_TIME';
         logEvent('🏁 HALF TIME!', 'half');
         document.getElementById('btn-start').innerText = 'Start 2nd Half';
-        // Reset positions but stay in HALF_TIME — kickoff happens when user clicks
-        this.ball.pos = new Vector(C.PITCH_W/2, C.PITCH_H/2);
-        this.ball.vel.mult(0); this.ball.z = 0; this.ball.vz = 0; this.ball.owner = null;
-        this.players.forEach(p => { if (!p.sentOff) { p.pos = p.basePos.copy(); p.vel.mult(0); } });
+        this.resetKickoff();
         this.players.forEach(p => { if (!p.sentOff) p.currentStamina = Math.min(100, p.currentStamina + 25); });
         this.advantageSystem.onStoppage(this);
         break;
@@ -1966,7 +1462,7 @@ class MatchEngine {
 
   updatePossession() {
     if (this.ball.owner) {
-    if (this.ball.owner.team === 0) this.possessionFrames.home++;
+      if (this.ball.owner.team === 0) this.possessionFrames.home++;
       else this.possessionFrames.away++;
     }
     let total = this.possessionFrames.home + this.possessionFrames.away;
@@ -1987,27 +1483,6 @@ class MatchEngine {
       this.overlayGraphics.clear();
     }
 
-    if (this.state === 'HALF_TIME' || this.state === 'FULL_TIME') {
-      this.overlayGraphics.fillStyle(0x000000, 0.7);
-      this.overlayGraphics.fillRect(0, 0, C.PITCH_W, C.PITCH_H);
-      if (!this.stateText) {
-        this.stateText = this.scene.add.text(C.PITCH_W/2, C.PITCH_H/2 - 20, '', {
-          fontFamily: 'sans-serif', fontSize: '64px', fontStyle: 'bold', color: '#ffffff'
-        }).setOrigin(0.5).setAlpha(0.9);
-        this.subStateText = this.scene.add.text(C.PITCH_W/2, C.PITCH_H/2 + 40, 'Click Start/Resume to continue', {
-          fontFamily: 'sans-serif', fontSize: '24px', color: '#aaaaaa'
-        }).setOrigin(0.5).setAlpha(0.9);
-      }
-      this.stateText.setText(this.state === 'HALF_TIME' ? 'HALF TIME' : 'FULL TIME');
-      this.stateText.setVisible(true);
-      this.subStateText.setVisible(true);
-    } else {
-      if (this.stateText) {
-        this.stateText.setVisible(false);
-        this.subStateText.setVisible(false);
-      }
-    }
-
     this.referee.draw();
     this.linesmen.forEach(l => l.draw());
     this.players.forEach(p => p.draw());
@@ -2020,7 +1495,7 @@ class MatchEngine {
 function updateUI(engine) {
   let t = Math.floor(engine.time);
   let m = Math.floor(t/60), s = t % 60;
-  document.getElementById('match-time').innerText = `${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+  document.getElementById('match-time').innerText = \\\`\\\${m.toString().padStart(2,'0')}:\\\${s.toString().padStart(2,'0')}\\\`;
 
   document.getElementById('match-half').innerText =
     engine.state === 'FULL_TIME' ? 'Full Time' :
@@ -2040,8 +1515,8 @@ function updateUI(engine) {
   let strEl = document.getElementById('referee-strictness');
   if (refEl) refEl.innerText = engine.referee.name;
   if (strEl) {
-    strEl.innerText = engine.referee.strictnessLabel + ` (${engine.referee.strictness})`;
-    strEl.className = `strictness-${engine.referee.strictnessLabel.toLowerCase()}`;
+    strEl.innerText = engine.referee.strictnessLabel + \\\` (\\\${engine.referee.strictness})\\\`;
+    strEl.className = \\\`strictness-\\\${engine.referee.strictnessLabel.toLowerCase()}\\\`;
   }
 
   let vb = document.getElementById('btn-var-toggle');
@@ -2081,21 +1556,14 @@ class MatchScene extends Phaser.Scene {
 
   update(time, delta) {
     if (engine) {
-      if (engine.crashed) return;
-      try {
-        let elapsed = Math.min(delta, 200);
-        engine.accumulator += elapsed;
-        while (engine.accumulator >= engine.FIXED_DT) {
-          engine.update();
-          engine.accumulator -= engine.FIXED_DT;
-        }
-        engine.draw();
-        updateUI(engine);
-      } catch (err) {
-        engine.crashed = true;
-        console.error(err);
-        alert("CRASH: " + err.message + "\n\n" + err.stack);
+      let elapsed = Math.min(delta, 200);
+      engine.accumulator += elapsed;
+      while (engine.accumulator >= engine.FIXED_DT) {
+        engine.update();
+        engine.accumulator -= engine.FIXED_DT;
       }
+      engine.draw();
+      updateUI(engine);
     }
   }
 
@@ -2109,20 +1577,12 @@ class MatchScene extends Phaser.Scene {
       g.fillRect(c.x, c.y, 3, 3); 
     });
 
-    // Premium Grass Base
-    g.fillStyle(0x288741, 1);
+    g.fillStyle(0x22c55e, 1);
     g.fillRect(0, 0, C.PITCH_W, C.PITCH_H);
-    
-    // Mowing stripes
-    g.fillStyle(0x3ab859, 0.8);
-    for (let x = 0; x < C.PITCH_W; x += 50) {
-      if ((x/50) % 2 === 0) g.fillRect(x, 0, 50, C.PITCH_H);
+    g.fillStyle(0x000000, 0.025);
+    for (let x = 0; x < C.PITCH_W; x += 80) {
+      if ((x/80) % 2 === 0) g.fillRect(x, 0, 80, C.PITCH_H);
     }
-
-    // Top and bottom vignette
-    g.fillStyle(0x000000, 0.15);
-    g.fillRect(0, 0, C.PITCH_W, 25);
-    g.fillRect(0, C.PITCH_H - 25, C.PITCH_W, 25);
 
     g.lineStyle(2, 0xffffff, 0.6);
     g.strokeRect(0, 0, C.PITCH_W, C.PITCH_H);
@@ -2186,22 +1646,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('btn-start').addEventListener('click', e => {
     if (engine.state === 'STOPPED') {
-      // Initial kickoff: home team kicks off
-      engine.resetKickoff(0);
-      e.target.innerText = 'Pause';
-    } else if (engine.state === 'PLAYING' || engine.state === 'SET_PIECE') {
+      engine.state = 'PLAYING'; e.target.innerText = 'Pause';
+      logEvent('⚽ Kickoff!', 'action');
+    } else if (engine.state === 'PLAYING') {
       engine.state = 'STOPPED'; e.target.innerText = 'Resume';
     } else if (engine.state === 'HALF_TIME') {
-      // 2nd half: away team kicks off (FIFA rule)
-      engine.half = 2;
-      engine.resetKickoff(1);
+      engine.state = 'PLAYING'; engine.half = 2;
       e.target.innerText = 'Pause';
-      logEvent('⚽ Second Half! Away team kicks off.', 'action');
+      logEvent('⚽ Second Half Kickoff!', 'action');
     }
   });
 
   [1,2,5,10].forEach(s => {
-    document.getElementById(`btn-speed-${s}x`).addEventListener('click', e => {
+    document.getElementById(\\\`btn-speed-\\\${s}x\\\`).addEventListener('click', e => {
       engine.speed = s;
       document.querySelectorAll('.controls button').forEach(b => { if (b.id.startsWith('btn-speed')) b.classList.remove('active'); });
       e.target.classList.add('active');
@@ -2211,24 +1668,13 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('btn-var-toggle').addEventListener('click', () => {
     engine.varSystem.enabled = !engine.varSystem.enabled;
   });
-
-  // Tactic, Formation, Mentality Change Listeners
-  const sf = document.getElementById('select-formation');
-  if (sf) {
-    sf.addEventListener('change', e => {
-      if (engine) engine.applyHomeFormation(e.target.value);
-    });
-  }
-  const st = document.getElementById('select-tactic');
-  if (st) {
-    st.addEventListener('change', e => {
-      if (engine) engine.homeTactic = e.target.value;
-    });
-  }
-  const sm = document.getElementById('select-mentality');
-  if (sm) {
-    sm.addEventListener('change', e => {
-      if (engine) engine.homeMentality = e.target.value;
-    });
-  }
 });
+`;
+fs.writeFileSync('main.js', content, 'utf8');
+
+// Fix string templates back from python/node escapes
+let c = fs.readFileSync('main.js', 'utf8');
+c = c.replace(/\\\\\\`/g, '`');
+c = c.replace(/\\\\\\\$/g, '$');
+fs.writeFileSync('main.js', c, 'utf8');
+console.log('Done refactoring Phase 5.');

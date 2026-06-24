@@ -46,6 +46,35 @@
         </div>
       </div>
 
+      <!-- Home Team Manager Panel -->
+      <div class="tactic-panel">
+        <div class="tactic-section">
+          <label for="select-formation">Formation</label>
+          <select id="select-formation">
+            <option value="4-4-2">4-4-2 (Default)</option>
+            <option value="4-3-3">4-3-3 (Attacking)</option>
+            <option value="3-5-2">3-5-2 (Midfield Heavy)</option>
+          </select>
+        </div>
+        <div class="tactic-section">
+          <label for="select-tactic">Tactic</label>
+          <select id="select-tactic">
+            <option value="Mixed">Mixed (Balanced)</option>
+            <option value="Tiki Taka">Tiki Taka (Possession)</option>
+            <option value="Gegenpress">Gegenpress (High Press)</option>
+            <option value="Low Block">Low Block (Defensive)</option>
+          </select>
+        </div>
+        <div class="tactic-section">
+          <label for="select-mentality">Mentality</label>
+          <select id="select-mentality">
+            <option value="Balanced">Balanced</option>
+            <option value="Attack">Attack</option>
+            <option value="Defend">Defend</option>
+          </select>
+        </div>
+      </div>
+
       <div class="controls">
         <button id="btn-start">Start Match</button>
         <button id="btn-speed-1x" class="active">1x</button>
@@ -55,8 +84,7 @@
         <button id="btn-var-toggle" class="btn-var active">VAR: ON</button>
       </div>
 
-      <div class="canvas-container">
-        <canvas id="pitch" width="800" height="500"></canvas>
+      <div class="canvas-container" id="pitch-container">
       </div>
 
       <div class="match-log" id="match-log">
