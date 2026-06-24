@@ -91,6 +91,8 @@ function generateAttributes(role) {
     composure:   8 + Math.random() * 8,
     stamina:     12 + Math.random() * 6,
     goalkeeping: 1 + Math.random() * 4,
+    heading:     8 + Math.random() * 8,
+    height:      170 + Math.random() * 25,
   };
 
   switch (role) {
@@ -109,20 +111,23 @@ function generateAttributes(role) {
       a.finishing = 4 + Math.random() * 5;
       a.aggression = 8 + Math.random() * 8;
       a.pace = 8 + Math.random() * 7;
+      a.heading = 12 + Math.random() * 8;
+      a.height = 180 + Math.random() * 15;
       break;
     case 'MID':
       a.passing = 12 + Math.random() * 6;
       a.vision = 12 + Math.random() * 7;
-      a.stamina = 14 + Math.random() * 5;
-      a.positioning = 10 + Math.random() * 6;
-      a.composure = 10 + Math.random() * 6;
+      a.stamina = 14 + Math.random() * 6;
+      a.dribbling = 10 + Math.random() * 8;
+      a.composure = 10 + Math.random() * 8;
       break;
     case 'FWD':
-      a.finishing = 13 + Math.random() * 6;
-      a.pace = 12 + Math.random() * 6;
-      a.composure = 11 + Math.random() * 6;
+      a.finishing = 12 + Math.random() * 8;
+      a.pace = 12 + Math.random() * 8;
       a.dribbling = 12 + Math.random() * 6;
-      a.positioning = 11 + Math.random() * 6;
+      a.composure = 12 + Math.random() * 6;
+      a.positioning = 12 + Math.random() * 6;
+      a.heading = 10 + Math.random() * 8;
       break;
   }
   for (let k in a) a[k] = Math.min(20, Math.max(1, Math.round(a[k])));
@@ -359,12 +364,12 @@ class Player {
               passVec.y += (Math.random() - 0.5) * 0.25;
               passVec.normalize();
               
-              let power = 9 + Math.random() * 3; // strong punt
+              let power = 10 + Math.random() * 2; // strong punt
               passVec.mult(power);
               
               ball.owner = null;
               ball.vel = passVec;
-              ball.vz = 5 + Math.random() * 4; // high flight
+              ball.vz = 10 + Math.random() * 2; // very high flight to clear immediate players
               ball.lastTouch = this;
               this.cooldown = 45;
               this.gkHoldTimer = 0;
@@ -452,6 +457,27 @@ class Player {
         return;
       }
 
+      // === CROSSING ===
+      let isWide = this.pos.y < C.PITCH_H * 0.2 || this.pos.y > C.PITCH_H * 0.8;
+      let inFinalThird = this.team === 0 ? this.pos.x > C.PITCH_W * 0.65 : this.pos.x < C.PITCH_W * 0.35;
+      
+      if (isWide && inFinalThird && Math.random() < 0.20) {
+         let crossTarget = new Vector(oppGoalX + (this.team === 0 ? -40 : 40), C.PITCH_H/2 + (Math.random()-0.5)*80);
+         let crossVec = Vector.sub(crossTarget, this.pos).normalize();
+         let passLen = this.pos.dist(crossTarget);
+         let power = 5 + (passLen / 80);
+         crossVec.mult(power);
+         
+         ball.owner = null;
+         ball.vel = crossVec;
+         let flightTime = passLen / power;
+         ball.vz = Math.min(10, (flightTime * C.GRAVITY) / 1.5); // High cross
+         ball.lastTouch = this;
+         this.cooldown = 40;
+         logEvent(`🔄 #${this.number} swings a cross into the box!`, 'action');
+         return;
+      }
+
       // === PASSING ===
       let passFreq = heavilyPressured ? 0.12 : pressured ? 0.06 : 0.008;
       if (tactic === 'Tiki Taka') {
@@ -481,6 +507,9 @@ class Player {
             score = nearestOppToT * 1.5 - passLen * 0.2;
           } else {
             score = forwardness * 0.6 - tDistGoal * 0.2 - passLen * 0.1 + nearestOppToT * 0.3;
+            // Bias towards wide players
+            let isTargetWide = t.pos.y < C.PITCH_H * 0.2 || t.pos.y > C.PITCH_H * 0.8;
+            if (isTargetWide) score += 20; 
           }
           score += (Math.random() - 0.5) * (20 - this.attr.vision) * 1.5;
           if (score > bestScore) { bestScore = score; bestTarget = t; }
@@ -532,6 +561,35 @@ class Player {
         target = new Vector(this.pos.x + (this.team === 0 ? 5 : -5), this.pos.y);
       }
 
+    } else if (ball.owner === null && distToBallGround < 35 && this.cooldown <= 0 && ball.z >= 20 && ball.z < 80) {
+      // === HEADER LOGIC ===
+      let winProb = (this.attr.heading / 20) * 0.6 + (this.attr.height / 200) * 0.4;
+      if (Math.random() < winProb) {
+         let oppGoalX = this.team === 0 ? C.PITCH_W : 0;
+         let oppGoalPos = new Vector(oppGoalX, C.PITCH_H / 2);
+         let distToGoal = this.pos.dist(oppGoalPos);
+         if (distToGoal < 180 && Math.random() < 0.6) {
+            let power = 4 + (this.attr.heading / 20) * 4;
+            let dir = Vector.sub(oppGoalPos, this.pos).normalize().mult(power);
+            ball.vel = dir;
+            ball.vz = Math.random() * 2;
+            logEvent(`🎯 #${this.number} wins the header and shoots!`, 'action');
+         } else {
+            let targetTeam = engine.players.filter(p => p.team === this.team && p !== this);
+            let target = targetTeam.sort((a,b) => this.pos.dist(a.pos) - this.pos.dist(b.pos))[0];
+            if (target) {
+               let dir = Vector.sub(target.pos, this.pos).normalize().mult(4);
+               ball.vel = dir;
+            } else {
+               ball.vel = new Vector(this.team === 0 ? 5 : -5, (Math.random()-0.5)*5);
+            }
+            logEvent(`⚽ #${this.number} wins the header.`, 'action');
+         }
+         ball.lastTouch = this;
+         this.cooldown = 20;
+      } else {
+         this.cooldown = 15; // Failed header duel
+      }
     } else if (ball.owner === null && distToBallGround < ballPickupDistance && this.cooldown <= 0 && ball.z < 20) {
       if (ball.vel.mag() > 5 && this.role !== 'GK' && Math.random() < 0.003) {
         engine.handleHandball(this, ball);
@@ -550,6 +608,9 @@ class Player {
       // ============================================================
       let dir = this.team === 0 ? 1 : -1;
       let ballX = ball.owner.pos.x;
+      if (ball.owner.role === 'GK') {
+        ballX = this.team === 0 ? C.PITCH_W * 0.45 : C.PITCH_W * 0.55; // Push up to prepare for GK punt
+      }
       let homePos = this.basePos.copy();
 
       // Team pushes up based on ball location and Mentality
@@ -602,7 +663,14 @@ class Player {
         } else if (tactic === 'Tiki Taka' && this.team === 0 && this.role !== 'GK') {
           target = new Vector(homePos.x * 0.6 + ball.pos.x * 0.4, homePos.y * 0.6 + ball.pos.y * 0.4);
         } else {
-          target = homePos;
+          let outfield = myTeam.filter(p => p.role !== 'GK' && p !== ball.owner);
+          let supporterIdx = [...outfield].sort((a, b) => a.pos.dist(ball.owner.pos) - b.pos.dist(ball.owner.pos)).indexOf(this);
+          if (supporterIdx < 2 && ball.owner.pos.dist(this.pos) > 50) {
+             // 2 nearest teammates approach ball carrier to offer short pass
+             target = new Vector(ball.owner.pos.x + (this.team === 0 ? -30 : 30), ball.owner.pos.y + (supporterIdx === 0 ? -50 : 50));
+          } else {
+             target = homePos;
+          }
         }
       }
 
@@ -982,14 +1050,14 @@ class FoulSystem {
   constructor(referee) { this.referee = referee; }
 
   evaluateTackle(tackler, carrier, engine) {
-    let aggrFactor = (tackler.attr.aggression / 20) * 18;
-    let discFactor = ((20 - tackler.attr.discipline) / 20) * 10;
+    let aggrFactor = (tackler.attr.aggression / 20) * 12;
+    let discFactor = ((20 - tackler.attr.discipline) / 20) * 5;
     let rndFactor = Math.random() * 10;
 
-    let fromBehind = Math.random() < 0.06 ? 25 : 0;
-    let twoFooted = Math.random() < 0.015 ? 35 : 0;
-    let lateTackle = Math.random() < 0.10 ? 15 : 0;
-    let strDiff = (carrier.attr.strength - tackler.attr.strength) / 20 * 15;
+    let fromBehind = Math.random() < 0.04 ? 20 : 0;
+    let twoFooted = Math.random() < 0.01 ? 30 : 0;
+    let lateTackle = Math.random() < 0.08 ? 15 : 0;
+    let strDiff = (carrier.attr.strength - tackler.attr.strength) / 20 * 10;
 
     let severity = aggrFactor + discFactor + fromBehind + twoFooted + lateTackle + rndFactor + strDiff;
     severity -= this.referee.thresholdMod;
@@ -1000,10 +1068,10 @@ class FoulSystem {
       card: null, isPenalty: false, isDOGSO: false, reason: ''
     };
 
-    if (severity <= 40) {
+    if (severity <= 55) {
       let tackleScore = tackler.tacklingAbility; 
       let dribbleScore = carrier.attr.dribbling * 3 + carrier.attr.strength * 2; 
-      let successChance = Math.max(10, Math.min(90, tackleScore - dribbleScore * 0.5 + 30));
+      let successChance = Math.max(15, Math.min(95, tackleScore - dribbleScore * 0.4 + 45));
       result.tackleSuccess = Math.random() * 100 < successChance;
       return result;
     }
@@ -1327,8 +1395,14 @@ class MatchEngine {
       [450,100,'MID'],[500,200,'MID'],[500,300,'MID'],[450,400,'MID'],
       [380,190,'FWD'],[380,310,'FWD']
     ];
-    hPos.forEach((p,i) => this.players.push(new Player(0, i+1, p[2], p[0], p[1], hC)));
-    aPos.forEach((p,i) => this.players.push(new Player(1, i+1, p[2], p[0], p[1], aC)));
+    hPos.forEach((p,i) => {
+      let color = p[2] === 'GK' ? '#39ff14' : hC; // bright green for Home GK
+      this.players.push(new Player(0, i+1, p[2], p[0], p[1], color));
+    });
+    aPos.forEach((p,i) => {
+      let color = p[2] === 'GK' ? '#facc15' : aC; // yellow for Away GK
+      this.players.push(new Player(1, i+1, p[2], p[0], p[1], color));
+    });
 
     // Initialize tactical values from Manager UI or defaults
     const sf = document.getElementById('select-formation');
@@ -1452,24 +1526,72 @@ class MatchEngine {
       return;
     }
 
-    let tp = this.getActivePlayers(teamToTake).filter(p => p.role !== 'GK');
-    let taker = tp.sort((a,b) => a.pos.dist(pos) - b.pos.dist(pos))[0];
+    let taker;
+    if (type === 'GOAL_KICK') {
+      taker = this.getActivePlayers(teamToTake).find(p => p.role === 'GK');
+    } else {
+      let tp = this.getActivePlayers(teamToTake).filter(p => p.role !== 'GK');
+      taker = tp.sort((a,b) => a.pos.dist(pos) - b.pos.dist(pos))[0];
+    }
+
     if (taker) {
       taker.pos = pos.copy();
       this.ball.owner = taker;
     }
     
+    if (type === 'CORNER') {
+      let opGoalX = teamToTake === 0 ? C.PITCH_W : 0;
+      let att = this.getActivePlayers(teamToTake).filter(p => p !== taker && p.role !== 'GK');
+      att.sort((a,b) => a.role === 'DEF' ? 1 : -1); 
+      let stayBack = att.slice(att.length - 2);
+      let crowdBox = att.slice(0, att.length - 2);
+
+      let attPositions = [
+        { dx: 15, dy: -40 }, { dx: 15, dy: 40 },
+        { dx: 30, dy: 0 }, { dx: 45, dy: -20 },
+        { dx: 45, dy: 20 }, { dx: 65, dy: 0 },
+        { dx: 75, dy: -30 }, { dx: 75, dy: 30 }
+      ];
+
+      crowdBox.forEach((p, i) => {
+        let posRef = attPositions[i % attPositions.length];
+        let rx = opGoalX + (teamToTake === 0 ? -posRef.dx : posRef.dx);
+        let ry = C.PITCH_H/2 + posRef.dy;
+        p.pos = new Vector(rx + (Math.random()-0.5)*15, ry + (Math.random()-0.5)*15);
+        p.vel.mult(0);
+      });
+      stayBack.forEach(p => {
+        let rx = C.PITCH_W/2 + (teamToTake === 0 ? 80 : -80);
+        let ry = C.PITCH_H/2 + (Math.random() - 0.5) * 60;
+        p.pos = new Vector(rx, ry);
+        p.vel.mult(0);
+      });
+
+      let defTeamFull = this.getActivePlayers(teamToTake === 0 ? 1 : 0);
+      let defGk = defTeamFull.find(p => p.role === 'GK');
+      if (defGk) {
+         defGk.pos = new Vector(opGoalX, C.PITCH_H/2);
+         defGk.vel.mult(0);
+      }
+      
+      let defTeam = defTeamFull.filter(p => p.role !== 'GK');
+      defTeam.forEach((p, i) => {
+        if (i < crowdBox.length) {
+          let markTarget = crowdBox[i];
+          let goalSide = Vector.sub(new Vector(opGoalX, C.PITCH_H/2), markTarget.pos).normalize().mult(15);
+          p.pos = markTarget.pos.copy().add(goalSide);
+        } else {
+          let rx = opGoalX + (teamToTake === 0 ? -Math.random()*40 - 20 : Math.random()*40 + 20);
+          let ry = C.PITCH_H/2 + (Math.random() - 0.5) * 100;
+          p.pos = new Vector(rx, ry);
+        }
+        p.vel.mult(0);
+      });
+    }
+    
     this.players.forEach(p => {
       if (p === taker || p.sentOff || p.role === 'GK') return;
-      if (type === 'CORNER') {
-        let opGoalX = teamToTake === 0 ? C.PITCH_W : 0;
-        let pbox = new Vector(opGoalX + (teamToTake===0 ? -50 : 50), C.PITCH_H/2);
-        if (p.team === teamToTake) {
-           p.vel = Vector.sub(pbox, p.pos).normalize().mult(Math.random()*2+1);
-        } else {
-           p.vel = Vector.sub(pbox, p.pos).normalize().mult(Math.random()*2+1);
-        }
-      } else if (type === 'THROW_IN') {
+      if (type === 'THROW_IN') {
         if (p.pos.dist(pos) < 50 && p.team !== teamToTake) {
            p.vel = Vector.sub(p.pos, pos).normalize().mult(2);
         }
@@ -1678,17 +1800,18 @@ class MatchEngine {
         }
       }
 
-    } else {
+    } else if (type === 'GOAL_KICK') {
       // GOAL KICK
       teammates.sort((a,b) => a.pos.dist(new Vector(taker.team===0?C.PITCH_W:0, C.PITCH_H/2)) - b.pos.dist(new Vector(taker.team===0?C.PITCH_W:0, C.PITCH_H/2)));
       let target = teammates[Math.floor(Math.random()*3)];
       if (target) {
         let passVec = Vector.sub(target.pos, taker.pos).normalize();
-        this.ball.vel = passVec.mult(7 + taker.attr.passing/4);
-        this.ball.vz = 5;
-        logEvent(`⬆️ #${taker.number} takes the goal kick.`, 'action');
+        this.ball.vel = passVec.mult(9 + taker.attr.passing/4);
+        this.ball.vz = 8; // High arc
+        logEvent(`⬆️ GK #${taker.number} punts the goal kick.`, 'action');
       } else {
-        this.ball.vel = new Vector(taker.team===0?1:-1, 0).mult(7);
+        this.ball.vel = new Vector(taker.team===0?1:-1, 0).mult(9);
+        this.ball.vz = 8;
       }
     }
 
@@ -1818,7 +1941,8 @@ class MatchEngine {
   handleVARResult(result) {
     if (result.type === 'GOAL') {
       if (result.decision === 'CONFIRM') {
-        setTimeout(() => { this.resetKickoff(0); }, 1500);
+        let kickTeam = result.data.kickingTeamAfterGoal !== undefined ? result.data.kickingTeamAfterGoal : 0;
+        setTimeout(() => { this.resetKickoff(kickTeam); }, 1500);
       }
     } else if (result.type === 'PENALTY') {
       if (result.decision === 'OVERTURN') {
@@ -1853,7 +1977,7 @@ class MatchEngine {
       logEvent(`⚽ GOOOAL for ${teamScored.toUpperCase()}! 🎉`, 'goal');
       this.state = 'STOPPED';
       this.advantageSystem.onStoppage(this);
-      if (!this.varSystem.checkEvent('GOAL', { team: teamScored }, this)) {
+      if (!this.varSystem.checkEvent('GOAL', { team: teamScored, kickingTeamAfterGoal }, this)) {
         setTimeout(() => { this.resetKickoff(kickingTeamAfterGoal); }, 2000);
       }
       return;
@@ -2183,6 +2307,77 @@ const config = {
 
 document.addEventListener('DOMContentLoaded', () => {
   new Phaser.Game(config);
+
+  // Start Menu Listeners
+  document.getElementById('btn-menu-start-match').addEventListener('click', () => {
+    document.getElementById('start-menu-overlay').classList.add('hidden');
+    document.getElementById('btn-exit-scenario').classList.add('hidden');
+    if (engine && engine.state === 'STOPPED') {
+      engine.resetKickoff(0);
+      document.getElementById('btn-start').innerText = 'Pause';
+    }
+  });
+
+  const setupScenario = (callback) => {
+    document.getElementById('start-menu-overlay').classList.add('hidden');
+    document.getElementById('btn-exit-scenario').classList.remove('hidden');
+    if (engine) {
+      engine.resetKickoff(0); // Resets to base positions
+      setTimeout(callback, 100);
+      document.getElementById('btn-start').innerText = 'Pause';
+    }
+  };
+
+  document.getElementById('btn-menu-corner').addEventListener('click', () => {
+    setupScenario(() => {
+      engine.triggerSetPiece('CORNER', new Vector(C.PITCH_W, C.PITCH_H), 0);
+    });
+  });
+
+  document.getElementById('btn-menu-freekick').addEventListener('click', () => {
+    setupScenario(() => {
+      // Free kick right outside the penalty box for Home team
+      engine.triggerSetPiece('FREE_KICK', new Vector(C.PITCH_W - C.PENALTY_BOX_W - 10, C.PITCH_H/2 + 20), 0);
+    });
+  });
+
+  document.getElementById('btn-menu-offside').addEventListener('click', () => {
+    setupScenario(() => {
+      // Force an offside scenario
+      let attacker = engine.getActivePlayers(0).find(p => p.role === 'FWD');
+      let defender = engine.getActivePlayers(1).find(p => p.role === 'DEF');
+      let passer = engine.getActivePlayers(0).find(p => p.role === 'MID');
+      
+      if (attacker && defender && passer) {
+         // Place attacker blatantly offside
+         attacker.pos = new Vector(C.PITCH_W - 50, C.PITCH_H/2);
+         // Place defender further up
+         defender.pos = new Vector(C.PITCH_W - 150, C.PITCH_H/2);
+         // Give ball to passer
+         passer.pos = new Vector(C.PITCH_W/2, C.PITCH_H/2);
+         engine.ball.owner = null;
+         engine.ball.pos = passer.pos.copy();
+         // Pass the ball
+         engine.ball.vel = Vector.sub(attacker.pos, passer.pos).normalize().mult(6);
+         engine.ball.lastTouch = passer;
+         engine.state = 'PLAYING';
+      }
+    });
+  });
+
+  document.getElementById('btn-exit-scenario').addEventListener('click', () => {
+    document.getElementById('start-menu-overlay').classList.remove('hidden');
+    document.getElementById('btn-exit-scenario').classList.add('hidden');
+    if (engine) {
+      engine.state = 'STOPPED';
+      engine.time = 0;
+      engine.half = 1;
+      engine.score = { home: 0, away: 0 };
+      document.getElementById('score-home').innerText = '0';
+      document.getElementById('score-away').innerText = '0';
+      document.getElementById('match-time').innerText = '00:00';
+    }
+  });
 
   document.getElementById('btn-start').addEventListener('click', e => {
     if (engine.state === 'STOPPED') {

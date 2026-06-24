@@ -8,6 +8,23 @@
   </head>
   <body>
     <div id="app">
+      <!-- Start Menu Overlay -->
+      <div id="start-menu-overlay" class="start-menu-overlay">
+        <div class="start-menu-content">
+          <h1>2D Football Match Engine</h1>
+          <p>Select a match mode to begin</p>
+          <div class="menu-buttons" style="flex-wrap: wrap;">
+            <button id="btn-menu-start-match" class="menu-btn primary">Start Standard Match</button>
+            <button id="btn-menu-corner" class="menu-btn secondary">Scenario: Corner</button>
+            <button id="btn-menu-freekick" class="menu-btn secondary">Scenario: Free Kick</button>
+            <button id="btn-menu-offside" class="menu-btn secondary">Scenario: Offside</button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Exit Scenario Button -->
+      <button id="btn-exit-scenario" class="menu-btn secondary hidden" style="position: absolute; top: 10px; right: 10px; z-index: 100;">Exit to Menu</button>
+
       <header class="scoreboard">
         <div class="team team-home">
           <h2>HOME</h2>
@@ -91,6 +108,6 @@
         <div class="log-entry">Match ready to start.</div>
       </div>
     </div>
-    <script type="module" src="./main.js"></script>
+    <script type="module" src="./src/main.js"></script>
   </body>
 </html>
