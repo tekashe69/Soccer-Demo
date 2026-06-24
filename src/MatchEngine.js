@@ -84,12 +84,24 @@ export class MatchEngine {
       [380,190,'FWD'],[380,310,'FWD']
     ];
     hPos.forEach((p,i) => {
-      let color = p[2] === 'GK' ? '#39ff14' : hC; // bright green for Home GK
-      this.players.push(new Player(0, i+1, p[2], p[0], p[1], color));
+      let isGk = p[2] === 'GK';
+      let colors = {
+        shirt: isGk ? 0x39ff14 : 0xef4444,
+        shorts: isGk ? 0x000000 : 0xffffff,
+        socks: isGk ? 0x39ff14 : 0xef4444,
+        skin: 0xffccaa
+      };
+      this.players.push(new Player(0, i+1, p[2], p[0], p[1], colors));
     });
     aPos.forEach((p,i) => {
-      let color = p[2] === 'GK' ? '#facc15' : aC; // yellow for Away GK
-      this.players.push(new Player(1, i+1, p[2], p[0], p[1], color));
+      let isGk = p[2] === 'GK';
+      let colors = {
+        shirt: isGk ? 0xfacc15 : 0x3b82f6,
+        shorts: isGk ? 0x000000 : 0xffffff,
+        socks: isGk ? 0xfacc15 : 0x3b82f6,
+        skin: 0x8d5524
+      };
+      this.players.push(new Player(1, i+1, p[2], p[0], p[1], colors));
     });
 
     // Initialize tactical values from Manager UI or defaults
@@ -136,7 +148,7 @@ export class MatchEngine {
       let config = hPos[idx];
       if (config) {
         p.role = config[2];
-        p.basePos = new Vector(config[0], config[1]);
+        p.basePos = new Vector(config[0] * 1.3, config[1] * 1.3);
         p.attr = generateAttributes(p.role); // refresh attributes for new role
         
         // If match hasn't started or is stopped/set piece, move player to base position immediately
@@ -367,6 +379,8 @@ export class MatchEngine {
     }
 
     kicker.cooldown = 60;
+    kicker.actionState = 'PASS';
+    kicker.actionTimer = 30;
     this.penaltyState = null;
     this.state = 'PLAYING';
   }
@@ -390,6 +404,8 @@ export class MatchEngine {
         logEvent(`⚽ Kickoff! #${taker.number} passes to #${receiver.number}`, 'action');
       }
       taker.cooldown = 30;
+      taker.actionState = 'PASS';
+      taker.actionTimer = 20;
       this.ball.owner = null;
       this.ball.lastTouch = taker;
       this.state = 'PLAYING';
@@ -439,6 +455,8 @@ export class MatchEngine {
         wp.pos = wallCenter.copy().add(perp.mult(offset));
         wp.vel.mult(0);
         wp.cooldown = 80;
+        wp.actionState = 'PASS';
+        wp.actionTimer = 20;
       });
 
       // Remaining defenders hold positions between ball and goal (zonal)
@@ -453,6 +471,8 @@ export class MatchEngine {
         }
         p.vel.mult(0);
         p.cooldown = 60;
+        p.actionState = 'SHOOT';
+        p.actionTimer = 30;
       });
 
       // Decision: shoot directly or pass to teammate
@@ -504,6 +524,8 @@ export class MatchEngine {
     }
 
     taker.cooldown = 40;
+    taker.actionState = 'SHOOT';
+    taker.actionTimer = 30;
     this.ball.owner = null;
     this.ball.lastTouch = taker;
     this.state = 'PLAYING';
@@ -521,6 +543,8 @@ export class MatchEngine {
         logEvent(`💪 #${tackler.number} wins the ball!`, 'action');
       } else {
         tackler.cooldown = 30;
+        tackler.actionState = 'TACKLE';
+        tackler.actionTimer = 30;
       }
       return;
     }

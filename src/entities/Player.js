@@ -3,15 +3,14 @@ import { C } from '../utils/constants.js';
 import { generateAttributes, isInPenaltyBox, logEvent } from '../utils/helpers.js';
 
 export class Player {
-  constructor(team, number, role, startX, startY, color) {
+  constructor(team, number, role, startX, startY, colors) {
     this.team = team;
     this.number = number;
     this.role = role;
-    this.basePos = new Vector(startX, startY);
-    this.pos = new Vector(startX, startY);
+    this.basePos = new Vector(startX * 1.3, startY * 1.3);
+    this.pos = new Vector(startX * 1.3, startY * 1.3);
     this.vel = new Vector(0, 0);
-    this.color = color;
-    this.colorHex = parseInt(color.replace('#', '0x'));
+    this.colors = colors;
 
     this.attr = generateAttributes(role);
     this.currentStamina = 100;
@@ -22,13 +21,20 @@ export class Player {
     this.sentOff = false;
     this.foulCount = 0;
     this.cardFlash = null;
+
+    this.facingAngle = team === 0 ? 0 : Math.PI;
+    this.animCycle = 0;
+    this.actionState = 'IDLE';
+    this.actionTimer = 0;
   }
 
   initGraphics(scene, container) {
     this.graphics = scene.add.graphics();
+    this.uiGraphics = scene.add.graphics();
     container.add(this.graphics);
+    container.add(this.uiGraphics);
     this.textObj = scene.add.text(0, 0, this.number.toString(), {
-      fontFamily: 'sans-serif', fontSize: '9px', fontStyle: 'bold', color: '#fff'
+      fontFamily: 'sans-serif', fontSize: '10px', fontStyle: 'bold', color: '#fff'
     }).setOrigin(0.5);
     container.add(this.textObj);
   }
@@ -51,10 +57,38 @@ export class Player {
   update(engine) {
     if (this.sentOff) return;
     if (this.cooldown > 0) this.cooldown--;
+    if (this.actionTimer > 0) this.actionTimer--;
     if (this.cardFlash) { this.cardFlash.timer--; if (this.cardFlash.timer <= 0) this.cardFlash = null; }
 
     let ball = engine.ball;
     
+    // Determine animation speed and facing angle
+    let speedSq = this.vel.magSq();
+    if (speedSq > 0.1) {
+      if (Math.abs(this.vel.x) > 0.1) this.flipX = this.vel.x < 0;
+    } else if (ball.owner === this) {
+      this.flipX = this.team === 0 ? false : true;
+    } else {
+      this.flipX = ball.pos.x < this.pos.x;
+    }
+
+    if (this.actionTimer <= 0) {
+      let speed = Math.sqrt(speedSq);
+      if (speed > C.MAX_SPEED * 0.7) {
+        this.actionState = 'SPRINT';
+        this.animCycle += speed * 0.18;
+      } else if (speed > C.MAX_SPEED * 0.3) {
+        this.actionState = 'RUN';
+        this.animCycle += speed * 0.15;
+      } else if (speed > 0.1) {
+        this.actionState = 'WALK';
+        this.animCycle += speed * 0.12;
+      } else {
+        this.actionState = 'IDLE';
+        this.animCycle = 0;
+      }
+    }
+
     // Reset GK holding timer if goalkeeper no longer has possession
     if (ball.owner !== this) {
       this.gkHoldTimer = 0;
@@ -143,6 +177,8 @@ export class Player {
               ball.vz = 0; // low throw
               ball.lastTouch = this;
               this.cooldown = 40;
+              this.actionState = 'PASS';
+              this.actionTimer = 20;
               this.gkHoldTimer = 0;
               logEvent(`🧤 GK #${this.number} rolls a short throw to #${targetPlayer.number}`, 'action');
             } else {
@@ -164,6 +200,8 @@ export class Player {
               ball.vz = 10 + Math.random() * 2; // very high flight to clear immediate players
               ball.lastTouch = this;
               this.cooldown = 45;
+              this.actionState = 'SHOOT';
+              this.actionTimer = 30;
               this.gkHoldTimer = 0;
               logEvent(`🧤 GK #${this.number} punts the ball long downfield!`, 'action');
             }
@@ -246,6 +284,8 @@ export class Player {
         }
         ball.lastTouch = this;
         this.cooldown = 40;
+        this.actionState = 'SHOOT';
+        this.actionTimer = 30;
         return;
       }
 
@@ -266,6 +306,8 @@ export class Player {
          ball.vz = Math.min(10, (flightTime * C.GRAVITY) / 1.5); // High cross
          ball.lastTouch = this;
          this.cooldown = 40;
+         this.actionState = 'PASS';
+         this.actionTimer = 30;
          logEvent(`🔄 #${this.number} swings a cross into the box!`, 'action');
          return;
       }
@@ -337,6 +379,8 @@ export class Player {
           }
           ball.lastTouch = this;
           this.cooldown = 25;
+          this.actionState = 'PASS';
+          this.actionTimer = 20;
           engine.lastSetPieceType = null;
           return;
         }
@@ -496,6 +540,15 @@ export class Player {
         let maxPressers = (tactic === 'Gegenpress' && this.team === 0) ? 4 : (tactic === 'Low Block' && this.team === 0) ? 1 : (this.role === 'FWD' ? 1 : 2);
         let isPresser = presserIdx < maxPressers;
 
+        // Step up if we are goal-side of the carrier and close
+        let distToCarrier = this.pos.dist(oppCarrier.pos);
+        if (distToCarrier < 250) {
+           let goalDirX = this.team === 0 ? -1 : 1;
+           if ((oppCarrier.pos.x - this.pos.x) * goalDirX < 0) {
+               isPresser = true;
+           }
+        }
+
         // Low Block tactics do not press in opponent's half
         if (tactic === 'Low Block' && this.team === 0 && ball.pos.x > C.PITCH_W * 0.45) {
           isPresser = false;
@@ -511,7 +564,9 @@ export class Player {
         }
 
         if (isPresser && distToBallGround < 300) {
-           target = oppCarrier.pos.copy();
+           // Target interception point to tackle from front/side
+           let interceptTime = distToBallGround / (C.MAX_SPEED * 1.5);
+           target = oppCarrier.pos.copy().add(oppCarrier.vel.copy().mult(interceptTime));
            if (isGkHolding) {
              let standOff = Vector.sub(this.pos, oppCarrier.pos);
              if (standOff.mag() === 0) standOff = new Vector((this.team === 0 ? -1 : 1), 0);
@@ -635,60 +690,172 @@ export class Player {
 
   draw() {
     let g = this.graphics;
+    let ui = this.uiGraphics;
     g.clear();
+    ui.clear();
     
     if (this.sentOff) {
       this.textObj.setVisible(false);
       return;
     }
-    this.textObj.setVisible(true);
+    this.textObj.setVisible(false); // Temporarily hide numbers
 
-    g.fillStyle(0x000000, 0.3);
-    g.fillEllipse(this.pos.x + 3, this.pos.y + 4, C.PLAYER_R * 1.6, C.PLAYER_R * 1.2);
-
-    g.fillStyle(this.colorHex, 1);
-    g.fillCircle(this.pos.x, this.pos.y, C.PLAYER_R);
+    g.setPosition(this.pos.x, this.pos.y);
+    g.scaleX = this.flipX ? -1 : 1;
+    // Don't rotate the whole container
+    g.setRotation(0);
     
-    g.lineStyle(2, 0xffffff, 0.3);
-    g.strokeCircle(this.pos.x, this.pos.y, C.PLAYER_R - 1);
-    g.lineStyle(1, 0x000000, 0.8);
-    g.strokeCircle(this.pos.x, this.pos.y, C.PLAYER_R);
+    ui.fillStyle(0x000000, 0.3);
+    ui.fillEllipse(this.pos.x + 3, this.pos.y + 14, C.PLAYER_R * 2, C.PLAYER_R * 1.5);
 
-    this.textObj.setPosition(this.pos.x, this.pos.y);
+    // Bone lengths
+    let upLeg = 6, lowLeg = 7;
+    let upArm = 5, lowArm = 6;
+    let torsoLen = 10;
+    
+    // Animation constants
+    let maxHip = 0, maxKnee = 0, maxShoulder = 0, maxElbow = 0;
+    let bodyLean = 0, armBend = 0;
+    let cycle = this.animCycle;
+    let swing = Math.sin(cycle);
+
+    if (this.actionState === 'IDLE') {
+      maxHip = 0; maxKnee = 0; maxShoulder = 0.1; maxElbow = 0;
+      armBend = 0.2;
+    } else if (this.actionState === 'WALK') {
+      maxHip = 0.4; maxKnee = 0.5; maxShoulder = 0.3; maxElbow = 0.3;
+      armBend = 0.2;
+    } else if (this.actionState === 'RUN') {
+      maxHip = 0.7; maxKnee = 0.8; maxShoulder = 0.6; maxElbow = 0.5;
+      bodyLean = 0.15; armBend = 0.6;
+    } else if (this.actionState === 'SPRINT') {
+      maxHip = 1.0; maxKnee = 1.2; maxShoulder = 0.9; maxElbow = 0.6;
+      bodyLean = 0.3; armBend = 1.0;
+    }
+
+    let fHip = Math.PI/2 + swing * maxHip;
+    let bHip = Math.PI/2 - swing * maxHip;
+    let fKnee = fHip + Math.max(0, -swing) * maxKnee;
+    let bKnee = bHip + Math.max(0, swing) * maxKnee;
+    let fShoulder = Math.PI/2 - swing * maxShoulder;
+    let bShoulder = Math.PI/2 + swing * maxShoulder;
+    let fElbow = fShoulder - armBend - Math.max(0, swing) * maxElbow;
+    let bElbow = bShoulder - armBend - Math.max(0, -swing) * maxElbow;
+
+    if (this.actionState === 'PASS' || this.actionState === 'SHOOT') {
+      let isShoot = this.actionState === 'SHOOT';
+      let progress = 1 - (this.actionTimer / (isShoot ? 30 : 20));
+      if (progress < 0.4) {
+         fHip = Math.PI/2 + (progress/0.4) * (isShoot ? 0.8 : 0.4);
+         fKnee = fHip + (isShoot ? 1.0 : 0.5);
+      } else if (progress < 0.6) {
+         let strike = (progress - 0.4) / 0.2;
+         fHip = Math.PI/2 + (1 - strike) * (isShoot ? 0.8 : 0.4) - strike * (isShoot ? 1.0 : 0.5);
+         fKnee = fHip + (1 - strike) * (isShoot ? 1.0 : 0.5);
+      } else {
+         let follow = (progress - 0.6) / 0.4;
+         fHip = Math.PI/2 - (1 - follow) * (isShoot ? 1.0 : 0.5);
+         fKnee = fHip;
+      }
+      bHip = Math.PI/2 + 0.2; bKnee = Math.PI/2 + 0.2;
+      bodyLean = isShoot ? -0.2 : 0; // Lean back slightly when shooting
+    } else if (this.actionState === 'TACKLE') {
+      bodyLean = Math.PI / 2 - 0.2;
+      fHip = Math.PI/2 - 0.4; fKnee = fHip;
+      bHip = Math.PI/2 + 0.2; bKnee = bHip + 0.5;
+      fShoulder = Math.PI/2 - 0.8; fElbow = fShoulder;
+      bShoulder = Math.PI/2 + 0.8; bElbow = bShoulder;
+    }
+
+    let drawLimb = (col1, col2, thick, sx, sy, a1, l1, a2, l2, isLeg) => {
+      let jx = sx + Math.cos(a1) * l1;
+      let jy = sy + Math.sin(a1) * l1;
+      let ex = jx + Math.cos(a2) * l2;
+      let ey = jy + Math.sin(a2) * l2;
+      
+      g.lineStyle(thick, col1, 1);
+      g.beginPath(); g.moveTo(sx, sy); g.lineTo(jx, jy); g.strokePath();
+      g.fillStyle(col1, 1); g.fillCircle(jx, jy, thick/2);
+      
+      g.lineStyle(thick, col2, 1);
+      g.beginPath(); g.moveTo(jx, jy); g.lineTo(ex, ey); g.strokePath();
+      g.fillStyle(col2, 1); g.fillCircle(ex, ey, thick/2);
+      
+      if (isLeg) { // Shoe
+        g.fillStyle(0x111111, 1);
+        g.fillEllipse(ex + 2, ey + 1, 6, 3);
+      } else { // Hand
+        g.fillStyle(this.colors.skin, 1);
+        g.fillCircle(ex, ey, thick/2 - 0.5);
+      }
+    };
+
+    let hipX = 0, hipY = 2; // Base offset
+    let shoulderX = hipX - Math.sin(bodyLean) * torsoLen;
+    let shoulderY = hipY - Math.cos(bodyLean) * torsoLen;
+
+    // Draw Back Arm
+    drawLimb(this.colors.shirt, this.colors.skin, 3, shoulderX, shoulderY, bShoulder, upArm, bElbow, lowArm, false);
+    // Draw Back Leg
+    drawLimb(this.colors.shorts, this.colors.socks, 4, hipX, hipY, bHip, upLeg, bKnee, lowLeg, true);
+
+    // Draw Torso
+    g.lineStyle(8, this.colors.shirt, 1);
+    g.beginPath(); g.moveTo(hipX, hipY); g.lineTo(shoulderX, shoulderY); g.strokePath();
+    g.fillStyle(this.colors.shirt, 1);
+    g.fillCircle(shoulderX, shoulderY, 4);
+    g.fillStyle(this.colors.shorts, 1);
+    g.fillCircle(hipX, hipY, 4);
+
+    // Draw Head
+    let headX = shoulderX - Math.sin(bodyLean) * 5;
+    let headY = shoulderY - Math.cos(bodyLean) * 5;
+    g.fillStyle(this.colors.skin, 1);
+    g.fillCircle(headX, headY, 4.5);
+    // Hair
+    g.fillStyle(this.team === 0 ? 0x3e2723 : 0x212121, 1);
+    g.fillCircle(headX - 1.5, headY - 2.5, 4.0); // Top
+    g.fillCircle(headX - 2.5, headY - 0.5, 3.5); // Back
+    // Draw Front Leg
+    drawLimb(this.colors.shorts, this.colors.socks, 4.5, hipX, hipY, fHip, upLeg, fKnee, lowLeg, true);
+    // Draw Front Arm
+    drawLimb(this.colors.shirt, this.colors.skin, 3.5, shoulderX, shoulderY, fShoulder, upArm, fElbow, lowArm, false);
+
+    this.textObj.setPosition(this.pos.x, this.pos.y - 15);
 
     let cx = this.pos.x + C.PLAYER_R + 2;
     let cy = this.pos.y - C.PLAYER_R - 2;
     if (this.yellowCards >= 1) {
-      g.fillStyle(0xfacc15, 1);
-      g.fillRect(cx, cy, 5, 7);
-      g.lineStyle(0.6, 0x000000, 1);
-      g.strokeRect(cx, cy, 5, 7);
+      ui.fillStyle(0xfacc15, 1);
+      ui.fillRect(cx, cy, 5, 7);
+      ui.lineStyle(0.6, 0x000000, 1);
+      ui.strokeRect(cx, cy, 5, 7);
     }
     if (this.yellowCards >= 2 || this.redCard) {
-      g.fillStyle(0xef4444, 1);
-      g.fillRect(cx + 6, cy, 5, 7);
-      g.lineStyle(0.6, 0x000000, 1);
-      g.strokeRect(cx + 6, cy, 5, 7);
+      ui.fillStyle(0xef4444, 1);
+      ui.fillRect(cx + 6, cy, 5, 7);
+      ui.lineStyle(0.6, 0x000000, 1);
+      ui.strokeRect(cx + 6, cy, 5, 7);
     }
 
     if (this.cardFlash) {
       let fc = this.cardFlash.type === 'YELLOW' ? 0xfacc15 : 0xef4444;
       let alpha = Math.min(1, this.cardFlash.timer / 60);
-      g.fillStyle(fc, alpha);
-      g.fillRect(this.pos.x - 6, this.pos.y - 26, 12, 16);
-      g.lineStyle(1, 0x000000, alpha);
-      g.strokeRect(this.pos.x - 6, this.pos.y - 26, 12, 16);
+      ui.fillStyle(fc, alpha);
+      ui.fillRect(this.pos.x - 6, this.pos.y - 26, 12, 16);
+      ui.lineStyle(1, 0x000000, alpha);
+      ui.strokeRect(this.pos.x - 6, this.pos.y - 26, 12, 16);
     }
 
     let bw = 14, bh = 2;
     let bx = this.pos.x - bw / 2;
     let by = this.pos.y + C.PLAYER_R + 5;
-    g.fillStyle(0x000000, 0.5);
-    g.fillRect(bx, by, bw, bh);
+    ui.fillStyle(0x000000, 0.5);
+    ui.fillRect(bx, by, bw, bh);
     let sp = this.currentStamina / 100;
     let spColor = sp > 0.5 ? 0x22c55e : sp > 0.25 ? 0xfacc15 : 0xef4444;
-    g.fillStyle(spColor, 1);
-    g.fillRect(bx, by, bw * sp, bh);
+    ui.fillStyle(spColor, 1);
+    ui.fillRect(bx, by, bw * sp, bh);
   }
 }
 

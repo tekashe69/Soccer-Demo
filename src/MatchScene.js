@@ -10,8 +10,8 @@ export class MatchScene extends Phaser.Scene {
   }
 
   create() {
-    this.container = this.add.container(50, 50);
-    this.container.setScale(0.85);
+    this.container = this.add.container(20, 30);
+    this.container.setScale(0.82);
 
     this.pitchGraphics = this.add.graphics();
     this.container.add(this.pitchGraphics);

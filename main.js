@@ -130,7 +130,13 @@ function generateAttributes(role) {
       a.heading = 10 + Math.random() * 8;
       break;
   }
-  for (let k in a) a[k] = Math.min(20, Math.max(1, Math.round(a[k])));
+  for (let k in a) {
+    if (k !== 'height') {
+      a[k] = Math.min(20, Math.max(1, Math.round(a[k])));
+    } else {
+      a[k] = Math.round(a[k]);
+    }
+  }
   return a;
 }
 
