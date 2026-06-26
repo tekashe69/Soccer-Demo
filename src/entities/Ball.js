@@ -1,5 +1,5 @@
 import { Vector } from '../utils/math.js';
-import { C } from '../utils/constants.js';
+import { C, worldToScreen } from '../utils/constants.js';
 
 export class Ball {
   constructor() {
@@ -51,27 +51,43 @@ export class Ball {
         if (this.vz < 0.5) this.vz = 0; // stop bouncing
       }
     }
+
+    // Net Collisions (Ball bounces inside the net)
+    if (this.pos.x < 0 && this.pos.y > C.GOAL_Y && this.pos.y < C.GOAL_Y + C.GOAL_W) {
+      if (this.pos.x <= -15) { this.pos.x = -15; this.vel.x *= -0.3; } // Back net
+      if (this.pos.y <= C.GOAL_Y + 5) { this.pos.y = C.GOAL_Y + 5; this.vel.y *= -0.3; } // Side net
+      if (this.pos.y >= C.GOAL_Y + C.GOAL_W - 5) { this.pos.y = C.GOAL_Y + C.GOAL_W - 5; this.vel.y *= -0.3; } // Side net
+      if (this.z >= 35) { this.z = 35; this.vz *= -0.3; } // Top net
+    } else if (this.pos.x > C.PITCH_W && this.pos.y > C.GOAL_Y && this.pos.y < C.GOAL_Y + C.GOAL_W) {
+      if (this.pos.x >= C.PITCH_W + 15) { this.pos.x = C.PITCH_W + 15; this.vel.x *= -0.3; }
+      if (this.pos.y <= C.GOAL_Y + 5) { this.pos.y = C.GOAL_Y + 5; this.vel.y *= -0.3; } 
+      if (this.pos.y >= C.GOAL_Y + C.GOAL_W - 5) { this.pos.y = C.GOAL_Y + C.GOAL_W - 5; this.vel.y *= -0.3; } 
+      if (this.z >= 35) { this.z = 35; this.vz *= -0.3; } 
+    }
   }
 
   draw() {
     let g = this.graphics;
     g.clear();
     
+    let p = worldToScreen(this.pos.x, this.pos.y, this.z);
+    let shadowP = worldToScreen(this.pos.x, this.pos.y, 0);
+
     // Shadow (stays at ground level, scales with height)
-    let shadowScale = Math.max(0.2, 1 - (this.z / 100));
-    g.fillStyle(0x000000, 0.4 * shadowScale);
-    g.fillEllipse(this.pos.x + 4, this.pos.y + 4, C.BALL_R * 2 * shadowScale, C.BALL_R * 1.2 * shadowScale);
+    let shadowScale = Math.max(0.2, 1 - (this.z / 100)) * shadowP.scale;
+    g.fillStyle(0x000000, 0.4);
+    g.fillEllipse(shadowP.x + 4 * shadowP.scale, shadowP.y + 4 * shadowP.scale, C.BALL_R * 2 * shadowScale, C.BALL_R * 1.2 * shadowScale);
 
     // Body (drawn higher up based on Z)
     g.fillStyle(0xffffff, 1);
-    g.fillCircle(this.pos.x, this.pos.y - this.z, C.BALL_R);
+    g.fillCircle(p.x, p.y, C.BALL_R * p.scale);
     
     // Classic soccer ball pattern dot
     g.fillStyle(0x222222, 1);
-    g.fillCircle(this.pos.x + 1, this.pos.y - this.z + 1, C.BALL_R * 0.4);
+    g.fillCircle(p.x + 1 * p.scale, p.y + 1 * p.scale, C.BALL_R * 0.4 * p.scale);
 
     g.lineStyle(1, 0x333333, 1);
-    g.strokeCircle(this.pos.x, this.pos.y - this.z, C.BALL_R);
+    g.strokeCircle(p.x, p.y, C.BALL_R * p.scale);
   }
 }
 

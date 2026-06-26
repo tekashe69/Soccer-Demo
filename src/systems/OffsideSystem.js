@@ -25,5 +25,15 @@ export class OffsideSystem {
 
     return { isOffside: diff > 0, offsideLineX: ol, offsidePos: receiver.pos.copy() };
   }
+
+  getOffsideLine(attackingTeam, engine) {
+    let opp = engine.getActivePlayers(attackingTeam === 0 ? 1 : 0);
+    if (attackingTeam === 0) opp.sort((a, b) => b.pos.x - a.pos.x);
+    else opp.sort((a, b) => a.pos.x - b.pos.x);
+
+    let sld = opp.length > 1 ? opp[1] : opp[0];
+    if (!sld) return attackingTeam === 0 ? C.PITCH_W : 0;
+    return sld.pos.x;
+  }
 }
 

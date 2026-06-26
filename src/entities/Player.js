@@ -1,5 +1,5 @@
 import { Vector } from '../utils/math.js';
-import { C } from '../utils/constants.js';
+import { C, worldToScreen } from '../utils/constants.js';
 import { generateAttributes, isInPenaltyBox, logEvent } from '../utils/helpers.js';
 
 export class Player {
@@ -7,8 +7,8 @@ export class Player {
     this.team = team;
     this.number = number;
     this.role = role;
-    this.basePos = new Vector(startX * 1.3, startY * 1.3);
-    this.pos = new Vector(startX * 1.3, startY * 1.3);
+    this.basePos = new Vector(startX * (C.PITCH_W/800), startY * (C.PITCH_H/500));
+    this.pos = new Vector(startX * (C.PITCH_W/800), startY * (C.PITCH_H/500));
     this.vel = new Vector(0, 0);
     this.colors = colors;
 
@@ -286,6 +286,8 @@ export class Player {
         this.cooldown = 40;
         this.actionState = 'SHOOT';
         this.actionTimer = 30;
+        let tk = this.team === 0 ? 'home' : 'away';
+        engine.stats[tk].shots++;
         return;
       }
 
@@ -352,7 +354,12 @@ export class Player {
         if (bestTarget) {
           let offRes = engine.offsideSystem.check(this, bestTarget, engine);
           if (offRes.isOffside) {
+            if (this.attr.vision >= 5) {
+              return; // Recycle ball: abort pass because teammate is offside
+            }
             logEvent(`🚩 OFFSIDE! Flag against #${bestTarget.number}`, 'whistle');
+            let tk = this.team === 0 ? 'home' : 'away';
+            engine.stats[tk].offsides++;
             engine.ball.owner = null;
             engine.ball.vel.mult(0);
             engine.ball.z = 0;
@@ -360,6 +367,9 @@ export class Player {
             engine.triggerSetPiece('FREE_KICK', offRes.offsidePos, this.team === 0 ? 1 : 0);
             return;
           }
+
+          let tk = this.team === 0 ? 'home' : 'away';
+          engine.stats[tk].passes++;
 
           let accuracy = 0.4 + (this.attr.passing / 20) * 0.5;
           let passVec = Vector.sub(bestTarget.pos, this.pos).normalize();
@@ -482,6 +492,16 @@ export class Player {
            let fwdRank = myTeam.filter(p => p.role === 'FWD').indexOf(this);
            let channelY = fwdRank === 0 ? C.PITCH_H * 0.3 : C.PITCH_H * 0.7;
            let runX = this.team === 0 ? Math.min(C.PITCH_W - 50, oppGoalX - 80) : Math.max(50, oppGoalX + 80);
+           
+           if (this.attr.positioning >= 5) {
+             let offsideLineX = engine.offsideSystem.getOffsideLine(this.team, engine);
+             if (this.team === 0) {
+               runX = Math.min(runX, offsideLineX - 5);
+             } else {
+               runX = Math.max(runX, offsideLineX + 5);
+             }
+           }
+           
            target = new Vector(runX, channelY);
         } else {
            target = homePos;
@@ -655,9 +675,11 @@ export class Player {
       }
     }
 
-    // Safety clamp target within pitch boundaries (at least 35px margin to keep players inside the lines)
-    target.x = Math.max(35, Math.min(C.PITCH_W - 35, target.x));
-    target.y = Math.max(35, Math.min(C.PITCH_H - 35, target.y));
+    // Safety clamp target within pitch boundaries (at least 10px margin to keep players inside the lines)
+    if (target.x < 10) target.x = 10;
+    if (target.x > C.PITCH_W - 10) target.x = C.PITCH_W - 10;
+    if (target.y < 10) target.y = 10;
+    if (target.y > C.PITCH_H - 10) target.y = C.PITCH_H - 10;
 
     if (this.role !== 'GK') {
       let rep = new Vector(0, 0);
@@ -700,13 +722,16 @@ export class Player {
     }
     this.textObj.setVisible(false); // Temporarily hide numbers
 
-    g.setPosition(this.pos.x, this.pos.y);
-    g.scaleX = this.flipX ? -1 : 1;
+    let p = worldToScreen(this.pos.x, this.pos.y, 0);
+
+    g.setPosition(p.x, p.y);
+    g.scaleX = (this.flipX ? -1 : 1) * p.scale;
+    g.scaleY = p.scale;
     // Don't rotate the whole container
     g.setRotation(0);
     
     ui.fillStyle(0x000000, 0.3);
-    ui.fillEllipse(this.pos.x + 3, this.pos.y + 14, C.PLAYER_R * 2, C.PLAYER_R * 1.5);
+    ui.fillEllipse(p.x + 3 * p.scale, p.y + 14 * p.scale, C.PLAYER_R * 2 * p.scale, C.PLAYER_R * 1.5 * p.scale);
 
     // Bone lengths
     let upLeg = 6, lowLeg = 7;
@@ -821,35 +846,36 @@ export class Player {
     // Draw Front Arm
     drawLimb(this.colors.shirt, this.colors.skin, 3.5, shoulderX, shoulderY, fShoulder, upArm, fElbow, lowArm, false);
 
-    this.textObj.setPosition(this.pos.x, this.pos.y - 15);
+    this.textObj.setPosition(p.x, p.y - 15 * p.scale);
+    this.textObj.setScale(p.scale);
 
-    let cx = this.pos.x + C.PLAYER_R + 2;
-    let cy = this.pos.y - C.PLAYER_R - 2;
+    let cx = p.x + (C.PLAYER_R + 2) * p.scale;
+    let cy = p.y - (C.PLAYER_R - 2) * p.scale;
     if (this.yellowCards >= 1) {
       ui.fillStyle(0xfacc15, 1);
-      ui.fillRect(cx, cy, 5, 7);
+      ui.fillRect(cx, cy, 5 * p.scale, 7 * p.scale);
       ui.lineStyle(0.6, 0x000000, 1);
-      ui.strokeRect(cx, cy, 5, 7);
+      ui.strokeRect(cx, cy, 5 * p.scale, 7 * p.scale);
     }
     if (this.yellowCards >= 2 || this.redCard) {
       ui.fillStyle(0xef4444, 1);
-      ui.fillRect(cx + 6, cy, 5, 7);
+      ui.fillRect(cx + 6 * p.scale, cy, 5 * p.scale, 7 * p.scale);
       ui.lineStyle(0.6, 0x000000, 1);
-      ui.strokeRect(cx + 6, cy, 5, 7);
+      ui.strokeRect(cx + 6 * p.scale, cy, 5 * p.scale, 7 * p.scale);
     }
 
     if (this.cardFlash) {
       let fc = this.cardFlash.type === 'YELLOW' ? 0xfacc15 : 0xef4444;
       let alpha = Math.min(1, this.cardFlash.timer / 60);
       ui.fillStyle(fc, alpha);
-      ui.fillRect(this.pos.x - 6, this.pos.y - 26, 12, 16);
+      ui.fillRect(p.x - 6 * p.scale, p.y - 26 * p.scale, 12 * p.scale, 16 * p.scale);
       ui.lineStyle(1, 0x000000, alpha);
-      ui.strokeRect(this.pos.x - 6, this.pos.y - 26, 12, 16);
+      ui.strokeRect(p.x - 6 * p.scale, p.y - 26 * p.scale, 12 * p.scale, 16 * p.scale);
     }
 
-    let bw = 14, bh = 2;
-    let bx = this.pos.x - bw / 2;
-    let by = this.pos.y + C.PLAYER_R + 5;
+    let bw = 14 * p.scale, bh = 2 * p.scale;
+    let bx = p.x - bw / 2;
+    let by = p.y + (C.PLAYER_R + 15) * p.scale;
     ui.fillStyle(0x000000, 0.5);
     ui.fillRect(bx, by, bw, bh);
     let sp = this.currentStamina / 100;

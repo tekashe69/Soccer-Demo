@@ -10,8 +10,8 @@ window.setMatchEngine = function(e) { engine = e; };
 
 const config = {
   type: Phaser.AUTO,
-  width: 900,
-  height: 600,
+  width: 1150,
+  height: 700,
   parent: 'pitch-container',
   scene: MatchScene,
   backgroundColor: '#0a0a0a'

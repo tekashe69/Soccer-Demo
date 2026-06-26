@@ -37,8 +37,8 @@ export class MatchEngine {
     this.nextSetPiece = null;
 
     this.stats = {
-      home: { fouls: 0, yellows: 0, reds: 0, possession: 0 },
-      away: { fouls: 0, yellows: 0, reds: 0, possession: 0 }
+      home: { fouls: 0, yellows: 0, reds: 0, possession: 0, passes: 0, shots: 0, offsides: 0, corners: 0 },
+      away: { fouls: 0, yellows: 0, reds: 0, possession: 0, passes: 0, shots: 0, offsides: 0, corners: 0 }
     };
     this.possessionFrames = { home: 0, away: 0 };
 
@@ -148,7 +148,7 @@ export class MatchEngine {
       let config = hPos[idx];
       if (config) {
         p.role = config[2];
-        p.basePos = new Vector(config[0] * 1.3, config[1] * 1.3);
+        p.basePos = new Vector(config[0] * (C.PITCH_W/800), config[1] * (C.PITCH_H/500));
         p.attr = generateAttributes(p.role); // refresh attributes for new role
         
         // If match hasn't started or is stopped/set piece, move player to base position immediately
@@ -210,6 +210,10 @@ export class MatchEngine {
   }
 
   triggerSetPiece(type, pos, teamToTake) {
+    if (type === 'CORNER') {
+      let tk = teamToTake === 0 ? 'home' : 'away';
+      this.stats[tk].corners++;
+    }
     this.state = 'SET_PIECE';
     this.setPieceTimer = 120;
     this.lastSetPieceType = type;
@@ -629,7 +633,7 @@ export class MatchEngine {
 
   handleVAROverturned(type, data) {
     if (type === 'GOAL') {
-      let t = data.team;
+      let t = data.teamScored;
       this.score[t]--;
       document.getElementById(`score-${t}`).innerText = this.score[t];
       logEvent(`❌ GOAL DISALLOWED by VAR!`, 'var');
@@ -689,11 +693,9 @@ export class MatchEngine {
       this.score[teamScored]++;
       document.getElementById(`score-${teamScored}`).innerText = this.score[teamScored];
       logEvent(`⚽ GOOOAL for ${teamScored.toUpperCase()}! 🎉`, 'goal');
-      this.state = 'STOPPED';
-      this.advantageSystem.onStoppage(this);
-      if (!this.varSystem.checkEvent('GOAL', { team: teamScored, kickingTeamAfterGoal }, this)) {
-        setTimeout(() => { this.resetKickoff(kickingTeamAfterGoal); }, 2000);
-      }
+      this.state = 'GOAL_SCORED';
+      this.goalScoredTimer = 150; // 2.5 seconds at 60fps
+      this.goalScoredData = { teamScored, kickingTeamAfterGoal };
       return;
     }
 
@@ -747,6 +749,20 @@ export class MatchEngine {
     for (let i = 0; i < this.speed; i++) {
       this.time += (1/60) * TIME_MULT;
       this.advantageSystem.update();
+
+      if (this.state === 'GOAL_SCORED') {
+        this.ball.update();
+        this.players.forEach(p => p.update(this));
+        this.goalScoredTimer--;
+        if (this.goalScoredTimer <= 0) {
+          this.state = 'STOPPED';
+          this.advantageSystem.onStoppage(this);
+          if (!this.varSystem.checkEvent('GOAL', this.goalScoredData, this)) {
+            this.resetKickoff(this.goalScoredData.kickingTeamAfterGoal);
+          }
+        }
+        continue;
+      }
 
       if (this.state === 'OUT_OF_BOUNDS') {
         this.ball.update(); 
@@ -868,10 +884,22 @@ export function updateUI(engine) {
   document.getElementById('stat-home-fouls').innerText = engine.stats.home.fouls;
   document.getElementById('stat-home-yellows').innerText = engine.stats.home.yellows;
   document.getElementById('stat-home-reds').innerText = engine.stats.home.reds;
-  document.getElementById('stat-home-possession').innerText = engine.stats.home.possession + '%';
+  
   document.getElementById('stat-away-fouls').innerText = engine.stats.away.fouls;
   document.getElementById('stat-away-yellows').innerText = engine.stats.away.yellows;
   document.getElementById('stat-away-reds').innerText = engine.stats.away.reds;
+
+  document.getElementById('stat-home-passes').innerText = engine.stats.home.passes;
+  document.getElementById('stat-home-shots').innerText = engine.stats.home.shots;
+  document.getElementById('stat-home-offsides').innerText = engine.stats.home.offsides;
+  document.getElementById('stat-home-corners').innerText = engine.stats.home.corners;
+
+  document.getElementById('stat-away-passes').innerText = engine.stats.away.passes;
+  document.getElementById('stat-away-shots').innerText = engine.stats.away.shots;
+  document.getElementById('stat-away-offsides').innerText = engine.stats.away.offsides;
+  document.getElementById('stat-away-corners').innerText = engine.stats.away.corners;
+  
+  document.getElementById('stat-home-possession').innerText = engine.stats.home.possession + '%';
   document.getElementById('stat-away-possession').innerText = engine.stats.away.possession + '%';
 
   let refEl = document.getElementById('referee-name');
